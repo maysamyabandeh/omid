@@ -29,7 +29,7 @@ import java.util.LinkedList;
  */
 public class SharedAbortedSet {
     protected Set<Long> aborted = new HashSet<Long>(1000);
-    protected DeleteEfficientQueue<Txn> queuedFullAborted;
+    protected DeleteEfficientQueue<Txn> queuedFullAborted = new DeleteEfficientQueue();
 
     public synchronized void clear() {
         aborted.clear();
@@ -68,16 +68,20 @@ public class SharedAbortedSet {
         }
     }
 
+    byte StartedTxnType = 0;
+    byte FullAbortedTxnType = 1;
     abstract class Txn {
         public Long Ts;
+        protected byte type;
         public Txn(Long Ts) {
             this.Ts = Ts;
         }
 
         @Override
         public boolean equals(Object o) {
-            if (o instanceof StartedTxn && o != null) {
-                return ((StartedTxn)o).Ts == Ts;
+            if (o instanceof Txn && o != null) {
+                Txn txn = (Txn)o;
+                return txn.Ts == Ts && txn.type == type;
             }
             return false;
         }
@@ -94,12 +98,14 @@ public class SharedAbortedSet {
     class StartedTxn extends Txn {
         public StartedTxn(Long Ts) {
             super(Ts);
+            type = StartedTxnType;
         }
     }
 
     class FullAbortedTxn extends Txn {
         public FullAbortedTxn(Long Ts) {
             super(Ts);
+            type = FullAbortedTxnType;
         }
     }
 }

@@ -77,8 +77,10 @@ public class DeleteEfficientQueue<E> {
     public void delete(E o) {
         E top = queue.peek();
         assert(top != null);
-        if (top.equals(o))
+        if (top.equals(o)) {
+            queue.poll();
             garbageCollectTops();
+        }
         else
             deletedSet.add(o);
     }
