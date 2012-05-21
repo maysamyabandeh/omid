@@ -85,7 +85,8 @@ public class TSOClient extends SimpleChannelHandler {
     private Map<Long, List<CommitQueryCallback>> isCommittedCallbacks;
 
     private Committed committed = new Committed();
-    private Set<Long> aborted = Collections.synchronizedSet(new HashSet<Long>(1000));
+    private SharedAbortedSet aborted = new SharedAbortedSet();
+    //private Set<Long> aborted = Collections.synchronizedSet(new HashSet<Long>(1000));
     public Map<Long, Long> failedElders = Collections.synchronizedMap(new HashMap<Long, Long>(1000));
     private long largestDeletedTimestamp;
     //the txn id of the in-progress elder with lowest start timestamp
@@ -518,7 +519,6 @@ public class TSOClient extends SimpleChannelHandler {
 
         if (hasConnectionTimestamp && transaction > connectionTimestamp)
             return transaction <= largestDeletedTimestamp ? -1 : -2;
-        //TODO: it works only if it runs one transaction at a time
         if (transaction <= largestDeletedTimestamp)
             return -1;//committed but the tc is lost
 
