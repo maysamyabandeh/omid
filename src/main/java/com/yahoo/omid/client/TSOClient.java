@@ -85,7 +85,7 @@ public class TSOClient extends SimpleChannelHandler {
     private Map<Long, List<CommitQueryCallback>> isCommittedCallbacks;
 
     private Committed committed = new Committed();
-    private SharedAbortedSet aborted = new SharedAbortedSet();
+    SharedAbortedSet aborted = new SharedAbortedSet();
     //private Set<Long> aborted = Collections.synchronizedSet(new HashSet<Long>(1000));
     public Map<Long, Long> failedElders = Collections.synchronizedMap(new HashMap<Long, Long>(1000));
     private long largestDeletedTimestamp;
