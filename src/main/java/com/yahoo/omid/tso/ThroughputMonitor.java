@@ -47,7 +47,7 @@ public class ThroughputMonitor extends Thread {
          return;
       }
       try {
-         long oldCounter = TSOHandler.getTransferredBytes();
+         long oldCounter = TSOHandler.txnCnt;
          long oldAbortCount = TSOHandler.abortCount;
          long oldHitCount = TSOHandler.hitCount;
          long startTime = System.currentTimeMillis();
@@ -83,7 +83,7 @@ public class ThroughputMonitor extends Thread {
             Thread.sleep(3000);
             
             long endTime = System.currentTimeMillis();
-            long newCounter = TSOHandler.getTransferredBytes();
+            long newCounter = TSOHandler.txnCnt;
             long newAbortCount = TSOHandler.abortCount;
             long newHitCount = TSOHandler.hitCount;
             //                long newWaitTime = TSOHandler.waitTime; 

@@ -65,6 +65,10 @@ public class Uncommited {
    public void abort(long id) {
       commit(id);
    }
+
+   public void finished(long id) {
+       commit(id);
+   }
    
    public boolean isUncommited(long id) {
       Bucket bucket = buckets[getRelativePosition(id)];

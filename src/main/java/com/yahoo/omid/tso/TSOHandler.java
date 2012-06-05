@@ -82,8 +82,7 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Bytes monitor
      */
-    public static final AtomicInteger transferredBytes = new AtomicInteger();
-    //   public static int transferredBytes = 0;
+    public static int txnCnt = 0;
     public static int abortCount = 0;
     public static int hitCount = 0;
     public static long queries = 0;
@@ -129,14 +128,6 @@ public class TSOHandler extends SimpleChannelHandler {
             }
         });
         this.flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
-    }
-
-    /**
-     * Returns the number of transferred bytes
-     * @return the number of transferred bytes
-     */
-    public static long getTransferredBytes() {
-        return transferredBytes.longValue();
     }
 
     /**
@@ -253,12 +244,33 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the CommitRequest message
      */
-    public void handle(CommitRequest msg, ChannelHandlerContext ctx) {
+    private void handle(CommitRequest msg, ChannelHandlerContext ctx) {
         CommitResponse reply = new CommitResponse(msg.startTimestamp);
-        DataOutputStream toWAL  = sharedState.toWAL;
-        reply.committed = true;
-        //HashSet<Integer> lockedSet = new HashSet();
+        //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
+        synchronized (sharedState) {
+            sharedState.uncommited.finished(msg.startTimestamp);
+        }
+        tryCommit(msg, ctx, reply);
+        try {
+            if (reply.committed) {
+                if (msg.writtenRows.length > 0)
+                    doCommit(msg, ctx, reply);
+            }
+            else
+                doAbort(msg, ctx, reply);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        //release the locks and send the response
+        releaseLocks(msg);
+        sendResponse(ctx, reply);
+    }
 
+    /**
+     * Check for potential conflicts and lock the corresponding rows
+     */
+    private void tryCommit(CommitRequest msg, ChannelHandlerContext ctx, CommitResponse reply) {
+        reply.committed = true;//default
         if (IsolationLevel.checkForReadWriteConflicts) {
             for (RowKey r : msg.readRows)
                 r.index = (r.hashCode() & 0x7FFFFFFF) % TSOState.MAX_ITEMS;
@@ -267,8 +279,6 @@ public class TSOHandler extends SimpleChannelHandler {
         for (RowKey r : msg.writtenRows)
             r.index = (r.hashCode() & 0x7FFFFFFF) % TSOState.MAX_ITEMS;
         Arrays.sort(msg.writtenRows);//to avoid deadlocks
-        //nosynchronized (sharedState) any more{
-        //{
         //0. check if it sould abort
         if (msg.startTimestamp < timestampOracle.first()) {
             reply.committed = false;
@@ -279,14 +289,26 @@ public class TSOHandler extends SimpleChannelHandler {
             LOG.warn("Too old starttimestamp: ST "+ msg.startTimestamp +" MAX " + sharedState.largestDeletedTimestamp);
         } else if (msg.writtenRows.length > 0) {
             //1. check the read-write conflicts
-            //for reads just need atomic access, no need to hold the locks
-            //do this check befor locking the write rows, otherwise in case of conflict we will face deadlocks
-            if (IsolationLevel.checkForReadWriteConflicts)
-                reply.committed = checkForConflictsIn(msg.readRows, msg.startTimestamp, reply.committed, false);
+            //for reads just need atomic access, but we need to hold locks since others 
+            //might update them before we obtain the commit timestamp
+            if (IsolationLevel.checkForReadWriteConflicts) {
+                int lastIndex = -1;
+                for (RowKey r: msg.readRows) {
+                    if (lastIndex != r.index) { //do not lock twice
+                        lastIndex = r.index;
+                        long tmaxForConflictChecking = sharedState.hashmap.lock(r.index);
+                        if (tmaxForConflictChecking > msg.startTimestamp) {
+                            reply.committed = false;
+                            break;
+                        }
+                    }
+                }
+                reply.committed = checkForConflictsIn(msg.readRows, msg.startTimestamp, reply.committed, true);
+            }
             //always lock writes, since gonna update them anyway
             int lastIndex = -1;
             for (RowKey r: msg.writtenRows) {
-                if (lastIndex != r.index) { //lockedSet.add(r.index)) {//do not lock twice
+                if (lastIndex != r.index) { //do not lock twice
                     lastIndex = r.index;
                     long tmaxForConflictChecking = sharedState.hashmap.lock(r.index);
                     if (tmaxForConflictChecking > msg.startTimestamp) {
@@ -298,110 +320,104 @@ public class TSOHandler extends SimpleChannelHandler {
             if (IsolationLevel.checkForWriteWriteConflicts)
                 reply.committed = checkForConflictsIn(msg.writtenRows, msg.startTimestamp, reply.committed, true);
         }
-        else reply.committed = true;
+    }
 
+    /**
+     * The potential conflicting rows are locked and no conflict is found.
+     * Do the commit and release the locks
+     */
+    private void doCommit(CommitRequest msg, ChannelHandlerContext ctx, CommitResponse reply) 
+        throws IOException {
         //this variable allows avoid sync blocks by not accessing largestDeletedTimestamp
         long newmax = -1;
         long oldmax = -1;
-        if (reply.committed) {
-            //2. commit
-            try {
-                reply.commitTimestamp = msg.startTimestamp;//default: Tc=Ts for read-only
-                if (msg.writtenRows.length > 0) {
-                    Set<Long> toAbort = null;
-                    //2.5 check the write-write conflicts to detect elders
-                    if (!IsolationLevel.checkForWriteWriteConflicts)
-                        checkForElders(reply, msg);
-                    //The following steps must be synchronized
-                    synchronized (sharedState) {
-                        newmax = oldmax = sharedState.largestDeletedTimestamp;
-                        //a) obtaining a commit timestamp
-                        synchronized (toWAL) {
-                            reply.commitTimestamp = timestampOracle.next(toWAL);
-                            //the recovery procedure assumes that write to the WAL and obtaining the commit timestamp is performed atmically
-                            toWAL.writeByte(LoggerProtocol.COMMIT);
-                            toWAL.writeLong(msg.startTimestamp);
-                            toWAL.writeLong(reply.commitTimestamp);//Tc is not necessary in theory, since we abort the in-progress txn after recovery, but it makes it easier for the recovery algorithm to bypass snapshotting
-                            if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//ww conflict
-                                //TODO: merge it with COMMIT entry
-                                toWAL.writeByte(LoggerProtocol.ELDER);
-                                toWAL.writeLong(msg.startTimestamp);
-                            }
-                        }
-                        //b) make sure that it will not be aborted concurrently
-                        sharedState.uncommited.commit(reply.commitTimestamp);
-                        sharedState.uncommited.commit(msg.startTimestamp);
-                        //c) commit the transaction
-                        //newmax = sharedState.hashmap.setCommitted(msg.startTimestamp, reply.commitTimestamp, newmax);
-                        newmax = sharedState.processCommit(msg.startTimestamp, reply.commitTimestamp, newmax);
-                        if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//if it is supposed to be reincarnated, also map Tc to Tc just in case of a future query.
-                            newmax = sharedState.hashmap.setCommitted(reply.commitTimestamp, reply.commitTimestamp, newmax);
-                        }
-                        //d) report the commit to the immdediate next txn
-                        synchronized (sharedMsgBufLock) {
-                            queueCommit(msg.startTimestamp, reply.commitTimestamp);
-                        }
-                        //e) report eldest if it is changed by this commit
-                        reportEldestIfChanged(reply, msg);
-                        //f) report Tmax if it is changed
-                        if (newmax > oldmax) {//I caused a raise in Tmax
-                            sharedState.largestDeletedTimestamp = newmax;
-                            toAbort = sharedState.uncommited.raiseLargestDeletedTransaction(newmax);
-                            if (!toAbort.isEmpty())
-                                LOG.warn("Slow transactions after raising max: " + toAbort);
-                            synchronized (sharedMsgBufLock) {
-                                for (Long id : toAbort)
-                                    queueHalfAbort(id);
-                                queueLargestIncrease(sharedState.largestDeletedTimestamp);
-                            }
-                        }
-                    }
-                    //now do the rest out of sync block to allow more concurrency
-                    if(LOG.isDebugEnabled()){
-                        LOG.debug("Adding commit to WAL");
-                    }
-                    //TODO: should we be able to recover the writeset of failed elders?
-                    if (newmax > oldmax) {//I caused a raise in Tmax
-                        synchronized (toWAL) {
-                            toWAL.writeByte(LoggerProtocol.LARGESTDELETEDTIMESTAMP);
-                            toWAL.writeLong(newmax);
-                        }
-                        synchronized (sharedState.hashmap) {
-                            for (Long id : toAbort)
-                                sharedState.hashmap.setHalfAborted(id);
-                        }
-                        if (!IsolationLevel.checkForWriteWriteConflicts) {
-                            Set<Elder> eldersToBeFailed = sharedState.elders.raiseLargestDeletedTransaction(newmax);
-                            if (eldersToBeFailed != null && !eldersToBeFailed.isEmpty()) {
-                                LOG.warn("failed elder transactions after raising max: " + eldersToBeFailed + " from " + oldmax + " to " + newmax);
-                                synchronized (sharedMsgBufLock) {
-                                    //report failedElders to the clients
-                                    for (Elder elder : eldersToBeFailed)
-                                        queueFailedElder(elder.getId(), elder.getCommitTimestamp());
-                                }
-                            }
-                        }
-                    }
-                    for (RowKey r: msg.writtenRows)
-                        sharedState.hashmap.put(r.getRow(), r.getTable(), reply.commitTimestamp, r.hashCode());
+        //2. commit
+        reply.commitTimestamp = msg.startTimestamp;//default: Tc=Ts for read-only
 
-                } else {//at least clean uncommited list
-                    synchronized (sharedState.hashmap) {
-                        sharedState.uncommited.commit(msg.startTimestamp);
+        Set<Long> toAbort = null;
+        //2.5 check the write-write conflicts to detect elders
+        if (!IsolationLevel.checkForWriteWriteConflicts)
+            checkForElders(reply, msg);
+        //The following steps must be synchronized
+        synchronized (sharedState) {
+            newmax = oldmax = sharedState.largestDeletedTimestamp;
+            //a) obtaining a commit timestamp
+            synchronized (sharedState.toWAL) {
+                reply.commitTimestamp = timestampOracle.next(sharedState.toWAL);
+                //the recovery procedure assumes that write to the WAL and obtaining the commit timestamp is performed atmically
+                sharedState.toWAL.writeByte(LoggerProtocol.COMMIT);
+                sharedState.toWAL.writeLong(msg.startTimestamp);
+                sharedState.toWAL.writeLong(reply.commitTimestamp);//Tc is not necessary in theory, since we abort the in-progress txn after recovery, but it makes it easier for the recovery algorithm to bypass snapshotting
+                if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//ww conflict
+                    //TODO: merge it with COMMIT entry
+                    sharedState.toWAL.writeByte(LoggerProtocol.ELDER);
+                    sharedState.toWAL.writeLong(msg.startTimestamp);
+                }
+            }
+            //b) for the sake of efficiency do this, otherwise raise in Tmax causes perofrmance problems
+            sharedState.uncommited.finished(reply.commitTimestamp);
+            //c) commit the transaction
+            //newmax = sharedState.hashmap.setCommitted(msg.startTimestamp, reply.commitTimestamp, newmax);
+            newmax = sharedState.processCommit(msg.startTimestamp, reply.commitTimestamp, newmax);
+            if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//if it is supposed to be reincarnated, also map Tc to Tc just in case of a future query.
+                newmax = sharedState.hashmap.setCommitted(reply.commitTimestamp, reply.commitTimestamp, newmax);
+            }
+            //d) report the commit to the immdediate next txn
+            synchronized (sharedMsgBufLock) {
+                queueCommit(msg.startTimestamp, reply.commitTimestamp);
+            }
+            //e) report eldest if it is changed by this commit
+            reportEldestIfChanged(reply, msg);
+            //f) report Tmax if it is changed
+            if (newmax > oldmax) {//I caused a raise in Tmax
+                sharedState.largestDeletedTimestamp = newmax;
+                toAbort = sharedState.uncommited.raiseLargestDeletedTransaction(newmax);
+                if (!toAbort.isEmpty())
+                    LOG.warn("Slow transactions after raising max: " + toAbort);
+                synchronized (sharedMsgBufLock) {
+                    for (Long id : toAbort)
+                        queueHalfAbort(id);
+                    queueLargestIncrease(sharedState.largestDeletedTimestamp);
+                }
+            }
+        }
+        //now do the rest out of sync block to allow more concurrency
+        if(LOG.isDebugEnabled()){
+            LOG.debug("Adding commit to WAL");
+        }
+        //TODO: should we be able to recover the writeset of failed elders?
+        if (newmax > oldmax) {//I caused a raise in Tmax
+            synchronized (sharedState.toWAL) {
+                sharedState.toWAL.writeByte(LoggerProtocol.LARGESTDELETEDTIMESTAMP);
+                sharedState.toWAL.writeLong(newmax);
+            }
+            synchronized (sharedState.hashmap) {
+                for (Long id : toAbort)
+                    sharedState.hashmap.setHalfAborted(id);
+            }
+            if (!IsolationLevel.checkForWriteWriteConflicts) {
+                Set<Elder> eldersToBeFailed = sharedState.elders.raiseLargestDeletedTransaction(newmax);
+                if (eldersToBeFailed != null && !eldersToBeFailed.isEmpty()) {
+                    LOG.warn("failed elder transactions after raising max: " + eldersToBeFailed + " from " + oldmax + " to " + newmax);
+                    synchronized (sharedMsgBufLock) {
+                        //report failedElders to the clients
+                        for (Elder elder : eldersToBeFailed)
+                            queueFailedElder(elder.getId(), elder.getCommitTimestamp());
                     }
                 }
-            } catch (IOException e) {
-                e.printStackTrace();
             }
-        } else { //add it to the aborted list
+        }
+        for (RowKey r: msg.writtenRows)
+            sharedState.hashmap.put(r.getRow(), r.getTable(), reply.commitTimestamp, r.hashCode());
+
+    }
+
+        private void doAbort(CommitRequest msg, ChannelHandlerContext ctx, CommitResponse reply)
+            throws IOException {
             abortCount++;
-            try {
-                synchronized (toWAL) {
-                    toWAL.writeByte(LoggerProtocol.ABORT);
-                    toWAL.writeLong(msg.startTimestamp);
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
+            synchronized (sharedState.toWAL) {
+                sharedState.toWAL.writeByte(LoggerProtocol.ABORT);
+                sharedState.toWAL.writeLong(msg.startTimestamp);
             }
             synchronized (sharedState.hashmap) {
                 sharedState.processAbort(msg.startTimestamp);
@@ -411,6 +427,10 @@ public class TSOHandler extends SimpleChannelHandler {
             }
         }
 
+    /**
+     * release the locks
+     */
+    private void releaseLocks(CommitRequest msg) {
         //for reads just need atomic access, no need to hold the locks
         //do it for writes though
         int lastIndex = -1;
@@ -419,42 +439,21 @@ public class TSOHandler extends SimpleChannelHandler {
                 sharedState.hashmap.unlock(r.index);
                 lastIndex = r.index;
             }
+    }
 
-
-        TSOHandler.transferredBytes.incrementAndGet();
-
+    /**
+     * send the response to the client
+     */
+    private void sendResponse(ChannelHandlerContext ctx, CommitResponse reply) {
         ChannelandMessage cam = new ChannelandMessage(ctx, reply);
-
         synchronized (sharedState) {
+            txnCnt++;
             sharedState.nextBatch.add(cam);
-            if (sharedState.baos.size() >= TSOState.BATCH_SIZE) {
-                if(LOG.isDebugEnabled()){
-                    LOG.debug("Going to add record of size " + sharedState.baos.size());
-                }
-                sharedState.addRecord(sharedState.baos.toByteArray(), new AddRecordCallback() {
-                    @Override
-                    public void addRecordComplete(int rc, Object ctx) {
-                        if (rc != Code.OK) {
-                            LOG.warn("Write failed: " + LoggerException.getMessage(rc));
-                        } else {
-                            synchronized (callbackLock) {
-                                @SuppressWarnings("unchecked")
-                                ArrayList<ChannelandMessage> theBatch = (ArrayList<ChannelandMessage>) ctx;
-                                for (ChannelandMessage cam : theBatch) {
-                                    Channels.write(cam.ctx, Channels.succeededFuture(cam.ctx.getChannel()), cam.msg);
-                                }
-                            }
-                        }
-                    }
-                }, sharedState.nextBatch);
-                sharedState.nextBatch = new ArrayList<ChannelandMessage>(sharedState.nextBatch.size() + 5);
-                sharedState.baos.reset();
-            }
+            if (sharedState.baos.size() >= TSOState.BATCH_SIZE)
+                flushTheBatch();
         }
 
     }
-
-    //}
 
     boolean checkForConflictsIn(RowKey[] rows, long startTimestamp, boolean committed, boolean isAlreadyLocked) {
         if (!committed)//already aborted
@@ -493,7 +492,8 @@ public class TSOHandler extends SimpleChannelHandler {
         }
     }
 
-    void reportEldestIfChanged(CommitResponse reply, CommitRequest msg) {
+    void reportEldestIfChanged(CommitResponse reply, CommitRequest msg) 
+        throws IOException{
         //2. add it to elders list
         if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {
             ArrayList<RowKey> rowsWithWriteWriteConflict = new ArrayList<RowKey>(reply.rowsWithWriteWriteConflict);
@@ -504,12 +504,8 @@ public class TSOHandler extends SimpleChannelHandler {
                     queueEldestUpdate(sharedState.elders.getEldest());
                 }
                 synchronized (sharedState.toWAL) {
-                    try {
-                        sharedState.toWAL.writeByte(LoggerProtocol.ELDEST);
-                        sharedState.toWAL.writeLong(msg.startTimestamp);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
+                    sharedState.toWAL.writeByte(LoggerProtocol.ELDEST);
+                    sharedState.toWAL.writeLong(msg.startTimestamp);
                 }
             }
             else
@@ -556,7 +552,7 @@ public class TSOHandler extends SimpleChannelHandler {
         }
     }
 
-    public void flush() {
+    private void flushTheBatch() {
         synchronized (sharedState) {
             if(LOG.isDebugEnabled()){
                 LOG.debug("Adding record, size " + sharedState.baos.size());
@@ -570,22 +566,23 @@ public class TSOHandler extends SimpleChannelHandler {
                         synchronized (callbackLock) {
                             @SuppressWarnings("unchecked")
                             ArrayList<ChannelandMessage> theBatch = (ArrayList<ChannelandMessage>) ctx;
-                            for (ChannelandMessage cam : theBatch) {
-                                Channels.write(cam.ctx, Channels.succeededFuture(cam.ctx.getChannel()), cam.msg);
-                            }
+            for (ChannelandMessage cam : theBatch) {
+                Channels.write(cam.ctx, Channels.succeededFuture(cam.ctx.getChannel()), cam.msg);
+            }
                         }
                     }
                 }
             }, sharedState.nextBatch);
             sharedState.nextBatch = new ArrayList<ChannelandMessage>(sharedState.nextBatch.size() + 5);
             sharedState.baos.reset();
+
             if (flushFuture.cancel(false)) {
                 flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
             }
         }
     }
 
-    public class FlushThread implements Runnable {
+    private class FlushThread implements Runnable {
         @Override
         public void run() {
             if (finish) {
@@ -597,7 +594,7 @@ public class TSOHandler extends SimpleChannelHandler {
                         if(LOG.isDebugEnabled()){
                             LOG.debug("Flushing log batch.");
                         }
-                        flush();
+                        flushTheBatch();
                     }
                 }
             }

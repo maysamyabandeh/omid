@@ -152,7 +152,6 @@ public class TSOState {
     */
    protected void processAbort(long startTimestamp){
        hashmap.setHalfAborted(startTimestamp);
-       uncommited.abort(startTimestamp);
    }
    
    /**
