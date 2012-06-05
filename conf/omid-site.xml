@@ -30,4 +30,8 @@
     <name>tso.wwcheck</name>
     <value>true</value>
   </property>
+  <property>
+    <name>tso.maxthread</name>
+    <value>4</value>
+  </property>
 </configuration>

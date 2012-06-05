@@ -76,22 +76,22 @@ public class BookKeeperStateBuilder extends StateBuilder {
 
     public static TSOState getState(TSOServerConfig config){
         TSOState returnValue;
-        if(config.getZkServers() == null){
-            LOG.warn("Logger is disabled");
+        //if(config.getZkServers() == null){
+            //LOG.warn("Logger is disabled");
             returnValue = new TSOState(new TimestampOracle());
-        } else {
-            BookKeeperStateBuilder builder = new BookKeeperStateBuilder(config);
-            
-            try{
-                returnValue = builder.buildState();
-                LOG.info("State built");
-            } catch (Throwable e) {
-                LOG.error("Error while building the state.", e);
-                returnValue = null;
-            } finally {
-                builder.shutdown();
-            }
-        }
+        //} else {
+            //BookKeeperStateBuilder builder = new BookKeeperStateBuilder(config);
+            //
+            //try{
+                //returnValue = builder.buildState();
+                //LOG.info("State built");
+            //} catch (Throwable e) {
+                //LOG.error("Error while building the state.", e);
+                //returnValue = null;
+            //} finally {
+                //builder.shutdown();
+            //}
+        //}
         return returnValue;        
     }
         

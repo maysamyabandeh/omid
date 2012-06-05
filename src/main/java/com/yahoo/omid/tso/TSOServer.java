@@ -21,6 +21,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+import com.yahoo.omid.OmidConfiguration;
+import org.apache.hadoop.conf.Configuration;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.jboss.netty.bootstrap.ServerBootstrap;
@@ -86,17 +89,24 @@ public class TSOServer implements Runnable {
 
     @Override
     public void run() {
+        Configuration conf = OmidConfiguration.create();
         // *** Start the Netty configuration ***
         // Start server with Nb of active threads = 2*NB CPU + 1 as maximum.
+        //int maxSocketThreads = conf.getInt("tso.maxsocketthread", (Runtime.getRuntime().availableProcessors() * 2 + 1) * 2);
+        //more worder threads has an inverse impact on performance, unless the one is saturated
+        int maxSocketThreads = conf.getInt("tso.maxsocketthread", 1);
         ChannelFactory factory = new NioServerSocketChannelFactory(Executors.newCachedThreadPool(),
-                Executors.newCachedThreadPool(), (Runtime.getRuntime().availableProcessors() * 2 + 1) * 2);
+                Executors.newCachedThreadPool(), maxSocketThreads);
 
         ServerBootstrap bootstrap = new ServerBootstrap(factory);
         // Create the global ChannelGroup
         ChannelGroup channelGroup = new DefaultChannelGroup(TSOServer.class.getName());
         // threads max
-        // int maxThreads = Runtime.getRuntime().availableProcessors() *2 + 1;
-        int maxThreads = 5;
+        //int maxThreads = Runtime.getRuntime().availableProcessors() *2 + 1;
+        //More concurrency gives lower performance due to synchronizations
+        int maxThreads = conf.getInt("tso.maxthread", 4);
+        System.out.println("maxThreads: " + maxThreads);
+        //int maxThreads = 5;
         // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
         ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824,
                 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
