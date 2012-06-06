@@ -29,40 +29,29 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class CommitRequest implements TSOMessage {
+public class PrepareCommit implements TSOMessage {
 
     /**
      * Starting timestamp
      */
     public long startTimestamp;
 
-    /**
-     * Is the commit prepared, or it needs prepration on the hashmap
-     */
-    public boolean prepared = false;
-
-    /**
-     * Is the prepration was successful?
-     * makes sense only if prepared is true
-     */
-    public boolean successfulPrepared = false;
-
-    public CommitRequest() {
+    public PrepareCommit() {
     }
 
-    public CommitRequest(long startTimestamp) {
+    public PrepareCommit(long startTimestamp) {
         this.startTimestamp = startTimestamp;
         this.writtenRows = new RowKey[0];
         this.readRows = new RowKey[0];
     }
 
-    public CommitRequest(long startTimestamp, RowKey[] writtenRows) {
+    public PrepareCommit(long startTimestamp, RowKey[] writtenRows) {
         this.startTimestamp = startTimestamp;
         this.writtenRows = writtenRows;
         this.readRows = new RowKey[0];
     }
 
-    public CommitRequest(long startTimestamp, RowKey[] writtenRows, RowKey[] readRows) {
+    public PrepareCommit(long startTimestamp, RowKey[] writtenRows, RowKey[] readRows) {
         this.startTimestamp = startTimestamp;
         this.writtenRows = writtenRows;
         this.readRows = readRows;
@@ -76,7 +65,7 @@ public class CommitRequest implements TSOMessage {
 
     @Override
     public String toString() {
-        return "CommitRequest: T_s:" + startTimestamp + " prepared: " + prepared;
+        return "PrepareCommit: T_s:" + startTimestamp;
     }
 
 
@@ -84,10 +73,6 @@ public class CommitRequest implements TSOMessage {
     public void readObject(ChannelBuffer aInputStream) throws IOException {
         long l = aInputStream.readLong();
         startTimestamp = l;
-        byte b = aInputStream.readByte();
-        prepared = b == 1;
-        b = aInputStream.readByte();
-        successfulPrepared = b == 1;
         int size = aInputStream.readInt();
         writtenRows = new RowKey[size];
         for (int i = 0; i < size; i++) {
@@ -107,8 +92,6 @@ public class CommitRequest implements TSOMessage {
     @Override
     public void writeObject(DataOutputStream aOutputStream) throws IOException {
         aOutputStream.writeLong(startTimestamp);
-        aOutputStream.writeByte(prepared ? 1 : 0);
-        aOutputStream.writeByte(successfulPrepared ? 1 : 0);
         aOutputStream.writeInt(writtenRows.length);
         for (RowKey r: writtenRows) {
             r.writeObject(aOutputStream);
@@ -119,4 +102,5 @@ public class CommitRequest implements TSOMessage {
         }
     }
 }
+
 
