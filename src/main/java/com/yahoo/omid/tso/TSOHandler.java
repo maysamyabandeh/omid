@@ -253,6 +253,12 @@ public class TSOHandler extends SimpleChannelHandler {
         PrepareResponse reply = new PrepareResponse(msg.startTimestamp);
         sortRows(msg.readRows, msg.writtenRows);
         reply.committed = prepareCommit(msg.startTimestamp, msg.readRows, msg.writtenRows);
+        LockOp lockOp = LockOp.ownIt;
+        if (!reply.committed) {
+            sharedState.failedPrepared.add(msg.startTimestamp);
+            lockOp = LockOp.unlock;//do not change the current owner if there is any
+        }
+        setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
         ctx.getChannel().write(reply);
     }
 
@@ -281,7 +287,12 @@ public class TSOHandler extends SimpleChannelHandler {
             e.printStackTrace();
         }
         //release the locks and send the response
-        setLocks(msg.readRows, msg.writtenRows, LOCKIT == false, msg.startTimestamp);
+        LockOp lockOp = LockOp.unlock;
+        if (msg.prepared) {
+            boolean wasFailed = sharedState.failedPrepared.remove(msg.startTimestamp);//just in case it was failed
+            lockOp = wasFailed ? LockOp.unlock : LockOp.disownIt;//if it was failed, it was not owened by us
+        }
+        setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
         sendResponse(ctx, reply);
     }
 
@@ -319,7 +330,7 @@ public class TSOHandler extends SimpleChannelHandler {
             //might update them before we obtain the commit timestamp
             //2. readRows matters only if we checkForReadWriteConflicts, but if it is not set, readRows are empty anyway
             //always lock writes, since gonna update them anyway
-            committed = setLocks(readRows, writtenRows, LOCKIT == true, startTimestamp);
+            committed = setLocks(readRows, writtenRows, LockOp.lock, startTimestamp);
             if (IsolationLevel.checkForReadWriteConflicts)
                 committed = checkForConflictsIn(readRows, startTimestamp, committed, true);
             if (IsolationLevel.checkForWriteWriteConflicts)
@@ -418,20 +429,27 @@ public class TSOHandler extends SimpleChannelHandler {
 
     }
 
-        private void doAbort(CommitRequest msg, CommitResponse reply)
-            throws IOException {
-            abortCount++;
-            synchronized (sharedState.toWAL) {
-                sharedState.toWAL.writeByte(LoggerProtocol.ABORT);
-                sharedState.toWAL.writeLong(msg.startTimestamp);
-            }
-            synchronized (sharedState.hashmap) {
-                sharedState.processAbort(msg.startTimestamp);
-            }
-            synchronized (sharedMsgBufLock) {
-                queueHalfAbort(msg.startTimestamp);
-            }
+    private void doAbort(CommitRequest msg, CommitResponse reply)
+        throws IOException {
+        abortCount++;
+        synchronized (sharedState.toWAL) {
+            sharedState.toWAL.writeByte(LoggerProtocol.ABORT);
+            sharedState.toWAL.writeLong(msg.startTimestamp);
         }
+        synchronized (sharedState.hashmap) {
+            sharedState.processAbort(msg.startTimestamp);
+        }
+        synchronized (sharedMsgBufLock) {
+            queueHalfAbort(msg.startTimestamp);
+        }
+    }
+
+    enum LockOp {
+        lock,
+        unlock,
+        ownIt,
+        disownIt
+    }
 
     /**
      * set the locks
@@ -439,7 +457,7 @@ public class TSOHandler extends SimpleChannelHandler {
      * iterate over items in the sort order
      * careful not to lock/unlock the same index twice
      */
-    private boolean setLocks(RowKey[] a1, RowKey[] a2, boolean lockIt, long startTimestamp) {
+    private boolean setLocks(RowKey[] a1, RowKey[] a2, LockOp lockOp, long startTimestamp) {
         boolean result = true;
         int lastIndex = -1, index;
         int a1i = 0, a2i = 0;
@@ -459,13 +477,22 @@ public class TSOHandler extends SimpleChannelHandler {
                 index = a2[a2i].index;
                 a2i++;
             }
-            if (lockIt) {
-                long tmaxForConflictChecking = sharedState.hashmap.lock(index);
-                if (tmaxForConflictChecking > startTimestamp)
-                    result = false;
+            switch (lockOp) {
+                case lock:
+                    boolean lockres = sharedState.hashmap.lock(index, startTimestamp);
+                    result = result && lockres;
+                    break;
+                case unlock:
+                    sharedState.hashmap.unlock(index);
+                    break;
+                case ownIt:
+                    sharedState.hashmap.unlock(index, true);
+                    break;
+                case disownIt:
+                    sharedState.hashmap.unlock(index, false);
+                    break;
+                default: System.exit(1);
             }
-            else
-                sharedState.hashmap.unlock(index);
             lastIndex = index;
         }
         return result;

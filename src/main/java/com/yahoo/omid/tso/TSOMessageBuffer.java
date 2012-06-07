@@ -29,6 +29,10 @@ import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
@@ -134,6 +138,10 @@ public class TSOMessageBuffer {
          buffer.writeByte(TSOMessage.CommitRequest);
       } else if (msg instanceof CommitResponse) {
          buffer.writeByte(TSOMessage.CommitResponse);
+      } else if (msg instanceof PrepareCommit) {
+         buffer.writeByte(TSOMessage.PrepareCommit);
+      } else if (msg instanceof PrepareResponse) {
+         buffer.writeByte(TSOMessage.PrepareResponse);
       } else if (msg instanceof FullAbortReport) {
          buffer.writeByte(TSOMessage.FullAbortReport);
       } else if (msg instanceof CommitQueryRequest) {

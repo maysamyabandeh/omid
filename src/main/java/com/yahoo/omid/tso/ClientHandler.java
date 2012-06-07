@@ -48,6 +48,8 @@ import com.yahoo.omid.client.SyncCreateCallback;
 import com.yahoo.omid.client.TSOClient;
 import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.TimestampResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 
 import com.yahoo.omid.IsolationLevel;
 //import java.util.Arrays;
@@ -208,6 +210,8 @@ public class ClientHandler extends TSOClient {
             handle((CommitResponse) msg);
         } else if (msg instanceof TimestampResponse) {
             handle((TimestampResponse) msg);
+        //} else if (msg instanceof PrepareResponse) {
+            //handle((PrepareResponse) msg);
         }
     }
 

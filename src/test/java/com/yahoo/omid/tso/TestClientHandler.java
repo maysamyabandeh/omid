@@ -38,12 +38,15 @@ import com.yahoo.omid.client.SyncAbortCompleteCallback;
 import com.yahoo.omid.client.SyncCommitCallback;
 import com.yahoo.omid.client.SyncCommitQueryCallback;
 import com.yahoo.omid.client.SyncCreateCallback;
+import com.yahoo.omid.client.SyncPrepareCallback;
 import com.yahoo.omid.client.TSOClient;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
@@ -92,7 +95,7 @@ public class TestClientHandler extends TSOClient {
    public void sendMessage(Object msg) throws IOException {
       if (msg instanceof CommitRequest) {
          CommitRequest cr = (CommitRequest) msg;
-         commit(cr.startTimestamp, cr.writtenRows, cr.readRows, new SyncCommitCallback());
+         commit(cr.startTimestamp, cr, new SyncCommitCallback());
       } else if (msg instanceof TimestampRequest) {
          getNewTimestamp(new SyncCreateCallback());
       } else if (msg instanceof CommitQueryRequest) {
@@ -101,6 +104,9 @@ public class TestClientHandler extends TSOClient {
       } else if (msg instanceof FullAbortReport) {
          FullAbortReport atr = (FullAbortReport) msg;
          completeAbort(atr.startTimestamp, new SyncAbortCompleteCallback());
+      } else if (msg instanceof PrepareCommit) {
+         PrepareCommit atr = (PrepareCommit) msg;
+         prepareCommit(atr.startTimestamp, atr, new SyncPrepareCallback());
       }
    }
 

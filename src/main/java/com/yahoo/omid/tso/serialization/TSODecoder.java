@@ -35,6 +35,8 @@ import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.FailedElderReport;
@@ -88,6 +90,12 @@ public class TSODecoder extends FrameDecoder {
                         break;
                     case TSOMessage.CommitResponse:
                         msg = new CommitResponse();
+                        break;
+                    case TSOMessage.PrepareCommit:
+                        msg = new PrepareCommit();
+                        break;
+                    case TSOMessage.PrepareResponse:
+                        msg = new PrepareResponse();
                         break;
                     case TSOMessage.FullAbortReport:
                         //                    msg = new FullAbortReport();

@@ -33,6 +33,8 @@ import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.EldestUpdate;
@@ -59,6 +61,10 @@ public class TSOEncoder extends OneToOneEncoder{
             objWrapper.writeByte(TSOMessage.CommitRequest);
         } else if (msg instanceof CommitResponse) {
             objWrapper.writeByte(TSOMessage.CommitResponse);
+        } else if (msg instanceof PrepareCommit) {
+            objWrapper.writeByte(TSOMessage.PrepareCommit);
+        } else if (msg instanceof PrepareResponse) {
+            objWrapper.writeByte(TSOMessage.PrepareResponse);
         } else if (msg instanceof AbortRequest) {
             objWrapper.writeByte(TSOMessage.AbortRequest);
         } else if (msg instanceof FullAbortReport) {

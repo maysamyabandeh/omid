@@ -24,6 +24,9 @@
 #include "com_yahoo_omid_tso_CommitHashMap.h"
 
 #define MAX_KEY_SIZE 256
+#define FREE 0
+#define OWNED 1
+
 /**
  * The load factor for the hashtable.
  */
@@ -147,6 +150,7 @@ struct Entry {
 
 struct LargeEntry {
    pthread_mutex_t  mutex;
+   unsigned char owned;
    Entry e1;
    Entry e2;
    Entry e3;
@@ -178,6 +182,7 @@ JNIEXPORT void JNICALL Java_com_yahoo_omid_tso_CommitHashMap_init
    printf("Entry* %p %%8 %lu ...\n", table, ((size_t)table)%8);
    printf("MEMORY initialization start ...\n");
    for (int i = 0; i < initialCapacity; i++) {
+       table[i].owned = FREE;
       pthread_mutex_init(&table[i].mutex, NULL);
       if (i%1000000==0) {
          printf("MEMORY i=%d\n", i);
@@ -215,27 +220,45 @@ JNIEXPORT void JNICALL Java_com_yahoo_omid_tso_CommitHashMap_init
  * Signature: (JI)J
  */
 
-JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_lock
-(JNIEnv * env , jobject jobj, jint index) {
+/*
+ * The difference with lock is that (i) it checks for tmax internally 
+ * (ii) it fails if it already has a distributed owner. 
+ * The latter is important specially in the case of distributed locks
+ */
+JNIEXPORT jboolean JNICALL Java_com_yahoo_omid_tso_CommitHashMap_lock
+(JNIEnv * env , jobject jobj, jint index, jlong startTimestamp) {
    int rc = pthread_mutex_lock(&table[index].mutex);
-   return tmaxForConflictChecking;
+   jlong tmax = tmaxForConflictChecking;
+   if (tmax > startTimestamp)
+       return JNI_FALSE;
+   if (table[index].owned != FREE)
+       return JNI_FALSE;
+   return JNI_TRUE;
 }
 
 
-JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_unlock
+JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_unlock__I
 (JNIEnv * env , jobject jobj, jint index) {
+   int rc = pthread_mutex_unlock(&table[index].mutex);
+   return 0;
+}
+
+JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_unlock__IZ
+(JNIEnv * env , jobject jobj, jint index, jboolean keepItOwned) {
+   table[index].owned = keepItOwned == JNI_TRUE ? !FREE : FREE;
    int rc = pthread_mutex_unlock(&table[index].mutex);
    return 0;
 }
 
 JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_atomicget
 (JNIEnv * env , jobject jobj, jbyteArray rowId, jbyteArray tableId, jint hash, jint index, jlong ts) {
-   jlong tmax = Java_com_yahoo_omid_tso_CommitHashMap_lock(env, jobj, index);
+   jboolean lockres = Java_com_yahoo_omid_tso_CommitHashMap_lock(env, jobj, index, ts);
    jlong res = Java_com_yahoo_omid_tso_CommitHashMap_get(env, jobj, rowId, tableId, hash);
    //if tmaxForConflictChecking is larger than the start timestamp, then return -1 to indicate abort
-   if (tmax > ts)//assme(ts >= 0)
+   //if (tmax > ts)//assme(ts >= 0)
+   if (lockres == JNI_FALSE)
       res = -1;
-   Java_com_yahoo_omid_tso_CommitHashMap_unlock(env, jobj, index);
+   Java_com_yahoo_omid_tso_CommitHashMap_unlock__I(env, jobj, index);
    return res;
 }
 

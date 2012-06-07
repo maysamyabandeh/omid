@@ -56,6 +56,8 @@ public interface TSOMessage {
    final public byte ReincarnationReport = (byte) 0xcc;
    final public byte FailedElderReport = (byte) 0xcd;
    final public byte EldestUpdate = (byte) 0xce;
+   final public byte PrepareCommit = (byte) 0xcf;
+   final public byte PrepareResponse =(byte) 0xd0;
 
    /*
     * Deserialize function

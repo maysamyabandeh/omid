@@ -20,6 +20,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Collections;
 
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import com.yahoo.omid.tso.persistence.BookKeeperStateBuilder;
@@ -122,6 +125,8 @@ public class TSOState {
 
    // The list of the elders: the committed transactions with write write conflicts
    public Elders elders;
+
+   public Set<Long> failedPrepared = Collections.synchronizedSet(new HashSet<Long>(100));
 
    /**
     * Process commit request.

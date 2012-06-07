@@ -59,6 +59,8 @@ import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.ReincarnationReport;
@@ -82,6 +84,7 @@ public class TSOClient extends SimpleChannelHandler {
 
     private Queue<CreateCallback> createCallbacks;
     private Map<Long, CommitCallback> commitCallbacks;
+    private Map<Long, PrepareCallback> prepareCallbacks;
     private Map<Long, List<CommitQueryCallback>> isCommittedCallbacks;
 
     private Committed committed = new Committed();
@@ -231,14 +234,12 @@ public class TSOClient extends SimpleChannelHandler {
 
     private class CommitOp implements Op  {
         long transactionId;
-        RowKey[] writtenRows;
-        RowKey[] readRows;
+        CommitRequest msg;
         CommitCallback cb;
 
-        CommitOp(long transactionid, RowKey[] writtenRows, RowKey[] readRows, CommitCallback cb) throws IOException {
+        CommitOp(long transactionid, CommitRequest msg, CommitCallback cb) throws IOException {
             this.transactionId = transactionid;
-            this.writtenRows = writtenRows;
-            this.readRows = readRows;
+            this.msg = msg;
             this.cb = cb;
         }
 
@@ -251,11 +252,7 @@ public class TSOClient extends SimpleChannelHandler {
                     commitCallbacks.put(transactionId, cb); 
                 }         
 
-                CommitRequest cr = new CommitRequest();
-                cr.startTimestamp = transactionId;
-                cr.writtenRows = writtenRows;
-                cr.readRows = readRows;
-                ChannelFuture f = channel.write(cr);
+                ChannelFuture f = channel.write(msg);
                 f.addListener(new ChannelFutureListener() {
                     public void operationComplete(ChannelFuture future) {
                         if (!future.isSuccess()) {
@@ -271,6 +268,47 @@ public class TSOClient extends SimpleChannelHandler {
         public void error(Exception e) {
             synchronized(commitCallbacks) {
                 commitCallbacks.remove(transactionId); 
+            }         
+            cb.error(e);
+        }
+    }
+
+    private class PrepareOp implements Op  {
+        long transactionId;
+        PrepareCommit msg;
+        PrepareCallback cb;
+
+        PrepareOp(long transactionid, PrepareCommit msg, PrepareCallback cb) throws IOException {
+            this.transactionId = transactionid;
+            this.msg = msg;
+            this.cb = cb;
+        }
+
+        public void execute(Channel channel) {
+            try {
+                synchronized(prepareCallbacks) {
+                    if (prepareCallbacks.containsKey(transactionId)) {
+                        throw new IOException("Already preparing transaction " + transactionId);
+                    }
+                    prepareCallbacks.put(transactionId, cb); 
+                }         
+
+                ChannelFuture f = channel.write(msg);
+                f.addListener(new ChannelFutureListener() {
+                    public void operationComplete(ChannelFuture future) {
+                        if (!future.isSuccess()) {
+                            error(new IOException("Error writing to socket"));
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                error(e);
+            }
+        }
+
+        public void error(Exception e) {
+            synchronized(prepareCallbacks) {
+                prepareCallbacks.remove(transactionId); 
             }         
             cb.error(e);
         }
@@ -359,6 +397,7 @@ public class TSOClient extends SimpleChannelHandler {
         retryTimer = new Timer(true);
 
         commitCallbacks = Collections.synchronizedMap(new HashMap<Long, CommitCallback>());
+        prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PrepareCallback>());
         isCommittedCallbacks = Collections.synchronizedMap(new HashMap<Long, List<CommitQueryCallback>>());
         createCallbacks = new ConcurrentLinkedQueue<CreateCallback>();
         channel = null;
@@ -445,11 +484,18 @@ public class TSOClient extends SimpleChannelHandler {
     }
 
     private static RowKey[] EMPTY_ROWS = new RowKey[0]; 
-    public void commit(long transactionId, RowKey[] writtenRows, RowKey[] readRows, CommitCallback cb) throws IOException {
-        if (writtenRows.length == 0) {
-            readRows = EMPTY_ROWS;
+    public void commit(long transactionId, CommitRequest msg, CommitCallback cb) throws IOException {
+        if (msg.writtenRows.length == 0) {
+            msg.readRows = EMPTY_ROWS;
         }
-        withConnection(new CommitOp(transactionId, writtenRows, readRows, cb));
+        withConnection(new CommitOp(transactionId, msg, cb));
+    }
+
+    public void prepareCommit(long transactionId, PrepareCommit msg, PrepareCallback cb) throws IOException {
+        if (msg.writtenRows.length == 0) {
+            msg.readRows = EMPTY_ROWS;
+        }
+        withConnection(new PrepareOp(transactionId, msg, cb));
     }
 
     public void completeAbort(long transactionId, AbortCompleteCallback cb) throws IOException {
@@ -562,6 +608,17 @@ public class TSOClient extends SimpleChannelHandler {
                 return;
             }
             cb.complete(r.committed ? Result.OK : Result.ABORTED, r.commitTimestamp, r.rowsWithWriteWriteConflict);
+        } else if (msg instanceof PrepareResponse) {
+            PrepareResponse r = (PrepareResponse)msg;
+            PrepareCallback cb = null;
+            synchronized (prepareCallbacks) {
+                cb = prepareCallbacks.remove(r.startTimestamp);
+            }
+            if (cb == null) {
+                LOG.error("Received a prepare response for a nonexisting prepare");
+                return;
+            }
+            cb.complete(r.committed ? Result.OK : Result.ABORTED);
         } else if (msg instanceof TimestampResponse) {
             CreateCallback cb = createCallbacks.poll();
             long timestamp = ((TimestampResponse)msg).timestamp;
