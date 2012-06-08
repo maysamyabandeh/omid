@@ -17,6 +17,7 @@
 package com.yahoo.omid.client;
 
 import com.yahoo.omid.tso.RowKey;
+import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.Statistics;
 
 import java.io.IOException;
@@ -99,9 +100,10 @@ public class TransactionManager {
         }
         SyncCommitCallback cb = new SyncCommitCallback();
         try {
-            tsoclient.commit(transactionState.getStartTimestamp(),
+            CommitRequest msg = new CommitRequest(transactionState.getStartTimestamp(),
                     transactionState.getWrittenRows(),
-                    transactionState.getReadRows(),cb);
+                    transactionState.getReadRows());
+            tsoclient.commit(transactionState.getStartTimestamp(), msg, cb);
             cb.await();
         } catch (Exception e) {
             throw new TransactionException("Could not commit", e);

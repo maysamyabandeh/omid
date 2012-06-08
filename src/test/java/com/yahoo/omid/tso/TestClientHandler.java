@@ -158,6 +158,16 @@ public class TestClientHandler extends TSOClient {
       }
    }
 
+   public <T extends TSOMessage> T skipUntilReceiveMessage(Class<T> type) {
+       Object msg;
+       do {
+           msg = receiveMessage();
+           if (type.isInstance(msg))
+               return (T) msg;
+       } while (msg != null);
+       return null;
+   }
+
    @SuppressWarnings("unchecked")
    public <T extends TSOMessage> T receiveMessage(Class<T> type) {
       try {

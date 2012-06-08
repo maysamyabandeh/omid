@@ -280,6 +280,8 @@ public class TSOHandler extends SimpleChannelHandler {
             if (reply.committed) {
                 if (msg.writtenRows.length > 0)
                     doCommit(msg, reply);
+                else
+                    reply.commitTimestamp = msg.startTimestamp;//default: Tc=Ts for read-only
             }
             else
                 doAbort(msg, reply);

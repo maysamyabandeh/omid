@@ -50,6 +50,7 @@ import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.PrepareResponse;
+import com.yahoo.omid.tso.messages.CommitRequest;
 
 import com.yahoo.omid.IsolationLevel;
 //import java.util.Arrays;
@@ -392,7 +393,8 @@ public class ClientHandler extends TSOClient {
                 wallClockTime.put(timestamp, System.nanoTime());
 
                 try {
-                    commit(timestamp, writtenRows, readRows, new SyncCommitCallback());
+                    CommitRequest msg = new CommitRequest(timestamp, writtenRows, readRows);
+                    commit(timestamp, msg, new SyncCommitCallback());
                 } catch (IOException e) {
                     LOG.error("Couldn't send commit", e);
                     e.printStackTrace();
