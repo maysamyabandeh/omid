@@ -18,4 +18,5 @@ package com.yahoo.omid.client;
 
 public interface Callback {
    public void error(Exception e);
+   public void complete();
 }

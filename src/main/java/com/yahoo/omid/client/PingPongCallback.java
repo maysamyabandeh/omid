@@ -16,6 +16,17 @@
 
 package com.yahoo.omid.client;
 
-public interface ReincarnationCompleteCallback extends Callback {
-    public void complete();
+import com.yahoo.omid.tso.TSOMessage;
+
+public class PingPongCallback<PONG extends TSOMessage> extends PingCallback {
+    PONG pong;
+
+    public PONG getPong() {
+        return pong;
+    }
+
+    synchronized public void complete(PONG pong) {
+        this.pong = pong;
+        complete();
+    }
 }

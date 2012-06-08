@@ -53,6 +53,10 @@ public class CommitResponse implements TSOMessage {
      */
     public ArrayList<RowKey> rowsWithWriteWriteConflict;
 
+    public boolean isElder() {
+        return rowsWithWriteWriteConflict != null && rowsWithWriteWriteConflict.size() != 0;
+    }
+
     /**
      * Constructor from startTimestamp
      * @param t

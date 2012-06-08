@@ -40,17 +40,15 @@ import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 
-import com.yahoo.omid.client.SyncAbortCompleteCallback;
-import com.yahoo.omid.client.SyncReincarnationCompleteCallback;
-import com.yahoo.omid.client.SyncCommitCallback;
-import com.yahoo.omid.client.SyncCommitQueryCallback;
-import com.yahoo.omid.client.SyncCreateCallback;
+import com.yahoo.omid.client.PingCallback;
+import com.yahoo.omid.client.PingPongCallback;
 import com.yahoo.omid.client.TSOClient;
 import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.CommitQueryResponse;
 
 import com.yahoo.omid.IsolationLevel;
 //import java.util.Arrays;
@@ -265,14 +263,14 @@ public class ClientHandler extends TSOClient {
                 for (RowKey r: msg.rowsWithWriteWriteConflict)
                     LOG.warn("WW " + msg.startTimestamp + " " + msg.commitTimestamp + " row is: ");
                 try {
-                    super.completeReincarnation(msg.startTimestamp, new SyncReincarnationCompleteCallback());
+                    super.completeReincarnation(msg.startTimestamp, PingCallback.DUMMY);
                 } catch (IOException e) {
                     LOG.error("Couldn't send reincarnation report", e);
                 }
             }
         } else {// aborted
             try {
-                super.completeAbort(msg.startTimestamp, new SyncAbortCompleteCallback());
+                super.completeAbort(msg.startTimestamp, PingCallback.DUMMY);
             } catch (IOException e) {
                 LOG.error("Couldn't send abort", e);
             }
@@ -367,7 +365,7 @@ public class ClientHandler extends TSOClient {
         if (totalCommitRequestSent % QUERY_RATE == 0 && writtenRows.length > 0) {
             long queryTimeStamp = rnd.nextInt(Math.abs((int) timestamp));
             try {
-                isCommitted(timestamp, queryTimeStamp, new SyncCommitQueryCallback());
+                isCommitted(timestamp, queryTimeStamp, new PingPongCallback<CommitQueryResponse>());
             } catch (IOException e) {
                 LOG.error("Couldn't send commit query", e);
             }
@@ -394,7 +392,7 @@ public class ClientHandler extends TSOClient {
 
                 try {
                     CommitRequest msg = new CommitRequest(timestamp, writtenRows, readRows);
-                    commit(timestamp, msg, new SyncCommitCallback());
+                    commit(timestamp, msg, new PingPongCallback<CommitResponse>());
                 } catch (IOException e) {
                     LOG.error("Couldn't send commit", e);
                     e.printStackTrace();
@@ -448,7 +446,7 @@ public class ClientHandler extends TSOClient {
             // outstandingTransactions.incrementAndGet();
             //         Channels.write(channel, tr);
             try {
-                super.getNewTimestamp(new SyncCreateCallback());
+                super.getNewTimestamp(new PingPongCallback<TimestampResponse>());
             } catch (IOException e) {
                 LOG.error("Couldn't start transaction", e);
             }

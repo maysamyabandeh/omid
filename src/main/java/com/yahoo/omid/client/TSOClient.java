@@ -82,10 +82,10 @@ public class TSOClient extends SimpleChannelHandler {
         OK, ABORTED 
     };
 
-    private Queue<CreateCallback> createCallbacks;
-    private Map<Long, CommitCallback> commitCallbacks;
-    private Map<Long, PrepareCallback> prepareCallbacks;
-    private Map<Long, List<CommitQueryCallback>> isCommittedCallbacks;
+    private Queue<PingPongCallback<TimestampResponse>> createCallbacks;
+    private Map<Long, PingPongCallback<CommitResponse>> commitCallbacks;
+    private Map<Long, PingPongCallback<PrepareResponse>> prepareCallbacks;
+    private Map<Long, List<PingPongCallback<CommitQueryResponse>>> isCommittedCallbacks;
 
     private Committed committed = new Committed();
     SharedAbortedSet aborted = new SharedAbortedSet();
@@ -116,142 +116,15 @@ public class TSOClient extends SimpleChannelHandler {
         public void error(Exception e);
     }
 
-    private class AbortOp implements Op {
-        long transactionId;
+    private class MessageOp<MSG extends TSOMessage> implements Op {
+        MSG msg;
 
-        AbortOp(long transactionid) throws IOException {
-            this.transactionId = transactionid;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                synchronized (commitCallbacks) {
-                    if (commitCallbacks.containsKey(transactionId)) {
-                        throw new IOException("Already committing transaction " + transactionId);
-                    }
-                }
-
-                AbortRequest ar = new AbortRequest();
-                ar.startTimestamp = transactionId;
-                ChannelFuture f = channel.write(ar);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-        }
-
-        public void error(Exception e) {
-        }
-    }
-
-    private class NewTimestampOp implements Op {
-        private CreateCallback cb; 
-
-        NewTimestampOp(CreateCallback cb) {
-            this.cb = cb;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                synchronized(createCallbacks) {
-                    createCallbacks.add(cb);
-                }
-
-                TimestampRequest tr = new TimestampRequest();
-                ChannelFuture f = channel.write(tr);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-        }
-
-        public void error(Exception e) {
-            synchronized(createCallbacks) {
-                createCallbacks.remove();
-            }
-
-            cb.error(e);
-        }
-    }
-
-    private class CommitQueryOp implements Op {
-        long startTimestamp;
-        long pendingWriteTimestamp;
-        CommitQueryCallback cb;
-
-        CommitQueryOp(long startTimestamp, long pendingWriteTimestamp, CommitQueryCallback cb) {
-            this.startTimestamp = startTimestamp;
-            this.pendingWriteTimestamp = pendingWriteTimestamp;
-            this.cb = cb;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                synchronized(isCommittedCallbacks) {
-                    List<CommitQueryCallback> callbacks = isCommittedCallbacks.get(startTimestamp);
-                    if (callbacks == null) {
-                        callbacks = new ArrayList<CommitQueryCallback>(1);
-                    }
-                    callbacks.add(cb);
-                    isCommittedCallbacks.put(startTimestamp, callbacks);
-                }
-
-                CommitQueryRequest qr = new CommitQueryRequest(startTimestamp, 
-                        pendingWriteTimestamp);
-                ChannelFuture f = channel.write(qr);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-        }
-
-        public void error(Exception e) {
-            synchronized(isCommittedCallbacks) {
-                isCommittedCallbacks.remove(startTimestamp);
-            }
-
-            cb.error(e);
-        }
-    }
-
-    private class CommitOp implements Op  {
-        long transactionId;
-        CommitRequest msg;
-        CommitCallback cb;
-
-        CommitOp(long transactionid, CommitRequest msg, CommitCallback cb) throws IOException {
-            this.transactionId = transactionid;
+        MessageOp(MSG msg) {
             this.msg = msg;
-            this.cb = cb;
         }
 
         public void execute(Channel channel) {
             try {
-                synchronized(commitCallbacks) {
-                    if (commitCallbacks.containsKey(transactionId)) {
-                        throw new IOException("Already committing transaction " + transactionId);
-                    }
-                    commitCallbacks.put(transactionId, cb); 
-                }         
-
                 ChannelFuture f = channel.write(msg);
                 f.addListener(new ChannelFutureListener() {
                     public void operationComplete(ChannelFuture future) {
@@ -266,121 +139,15 @@ public class TSOClient extends SimpleChannelHandler {
         }
 
         public void error(Exception e) {
-            synchronized(commitCallbacks) {
-                commitCallbacks.remove(transactionId); 
-            }         
-            cb.error(e);
         }
     }
 
-    private class PrepareOp implements Op  {
-        long transactionId;
-        PrepareCommit msg;
-        PrepareCallback cb;
+    private class SyncMessageOp<MSG extends TSOMessage> extends MessageOp<MSG> {
+        Callback cb;
 
-        PrepareOp(long transactionid, PrepareCommit msg, PrepareCallback cb) throws IOException {
-            this.transactionId = transactionid;
-            this.msg = msg;
+        SyncMessageOp(MSG msg, Callback cb) {
+            super(msg);
             this.cb = cb;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                synchronized(prepareCallbacks) {
-                    if (prepareCallbacks.containsKey(transactionId)) {
-                        throw new IOException("Already preparing transaction " + transactionId);
-                    }
-                    prepareCallbacks.put(transactionId, cb); 
-                }         
-
-                ChannelFuture f = channel.write(msg);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-        }
-
-        public void error(Exception e) {
-            synchronized(prepareCallbacks) {
-                prepareCallbacks.remove(transactionId); 
-            }         
-            cb.error(e);
-        }
-    }
-
-    private class AbortCompleteOp implements Op {
-        long transactionId;
-        AbortCompleteCallback cb;
-
-        AbortCompleteOp(long transactionId, AbortCompleteCallback cb) throws IOException {
-            this.transactionId = transactionId;
-            this.cb = cb;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                FullAbortReport far = new FullAbortReport();
-                far.startTimestamp = transactionId;
-
-                ChannelFuture f = channel.write(far);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        } else {
-                            cb.complete();
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-
-        }
-
-        public void error(Exception e) {
-            cb.error(e);
-        }
-    }
-
-    private class ReincarnationCompleteOp implements Op {
-        long transactionId;
-        ReincarnationCompleteCallback cb;
-
-        ReincarnationCompleteOp(long transactionId, ReincarnationCompleteCallback cb) throws IOException {
-            this.transactionId = transactionId;
-            this.cb = cb;
-        }
-
-        public void execute(Channel channel) {
-            try {
-                ReincarnationReport rr = new ReincarnationReport();
-                rr.startTimestamp = transactionId;
-
-                ChannelFuture f = channel.write(rr);
-                f.addListener(new ChannelFutureListener() {
-                    public void operationComplete(ChannelFuture future) {
-                        if (!future.isSuccess()) {
-                            error(new IOException("Error writing to socket"));
-                        } else {
-                            cb.complete();
-                        }
-                    }
-                });
-            } catch (Exception e) {
-                error(e);
-            }
-
-        }
-
-        public void error(Exception e) {
-            cb.error(e);
         }
     }
 
@@ -396,10 +163,10 @@ public class TSOClient extends SimpleChannelHandler {
         queuedOps = new ArrayBlockingQueue<Op>(200);
         retryTimer = new Timer(true);
 
-        commitCallbacks = Collections.synchronizedMap(new HashMap<Long, CommitCallback>());
-        prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PrepareCallback>());
-        isCommittedCallbacks = Collections.synchronizedMap(new HashMap<Long, List<CommitQueryCallback>>());
-        createCallbacks = new ConcurrentLinkedQueue<CreateCallback>();
+        commitCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<CommitResponse>>());
+        prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<PrepareResponse>>());
+        isCommittedCallbacks = Collections.synchronizedMap(new HashMap<Long, List<PingPongCallback<CommitQueryResponse>>>());
+        createCallbacks = new ConcurrentLinkedQueue<PingPongCallback<TimestampResponse>>();
         channel = null;
 
         System.out.println("Starting TSOClient");
@@ -470,42 +237,120 @@ public class TSOClient extends SimpleChannelHandler {
         }
     }
 
-    public void getNewTimestamp(CreateCallback cb) throws IOException {
-        withConnection(new NewTimestampOp(cb));
+    public void getNewTimestamp(PingPongCallback<TimestampResponse> cb) throws IOException {
+        synchronized(createCallbacks) {
+            createCallbacks.add(cb);
+        }
+        TimestampRequest tr = new TimestampRequest();
+        withConnection(new SyncMessageOp<TimestampRequest>(tr, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(createCallbacks) {
+                    createCallbacks.remove();
+                }
+                cb.error(e);
+            }
+        });
     }
 
-    public void isCommitted(long startTimestamp, long pendingWriteTimestamp, CommitQueryCallback cb)
+    public void isCommitted(long startTimestamp, long pendingWriteTimestamp, PingPongCallback<CommitQueryResponse> cb)
         throws IOException {
-        withConnection(new CommitQueryOp(startTimestamp, pendingWriteTimestamp, cb));
+        synchronized(isCommittedCallbacks) {
+            List<PingPongCallback<CommitQueryResponse>> callbacks = isCommittedCallbacks.get(startTimestamp);
+            if (callbacks == null) {
+                callbacks = new ArrayList<PingPongCallback<CommitQueryResponse>>(1);
+            }
+            callbacks.add(cb);
+            isCommittedCallbacks.put(startTimestamp, callbacks);
+        }
+        CommitQueryRequest qr = new CommitQueryRequest(startTimestamp, pendingWriteTimestamp);
+        withConnection(new SyncMessageOp<CommitQueryRequest>(qr, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(isCommittedCallbacks) {
+                    isCommittedCallbacks.remove(msg.startTimestamp);
+                }
+                cb.error(e);
+            }
+        });
     }
 
     public void abort(long transactionId) throws IOException {
-        withConnection(new AbortOp(transactionId));
+        synchronized (commitCallbacks) {
+            if (commitCallbacks.containsKey(transactionId)) {
+                throw new IOException("Already committing transaction " + transactionId);
+            }
+        }
+        AbortRequest ar = new AbortRequest();
+        ar.startTimestamp = transactionId;
+        withConnection(new MessageOp<AbortRequest>(ar));
     }
 
     private static RowKey[] EMPTY_ROWS = new RowKey[0]; 
-    public void commit(long transactionId, CommitRequest msg, CommitCallback cb) throws IOException {
+    public void commit(long transactionId, CommitRequest msg, PingPongCallback<CommitResponse> cb) throws IOException {
         if (msg.writtenRows.length == 0) {
             msg.readRows = EMPTY_ROWS;
         }
-        withConnection(new CommitOp(transactionId, msg, cb));
+        synchronized(commitCallbacks) {
+            if (commitCallbacks.containsKey(transactionId)) {
+                throw new IOException("Already committing transaction " + transactionId);
+            }
+            commitCallbacks.put(transactionId, cb); 
+        }
+        withConnection(new SyncMessageOp<CommitRequest>(msg, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(commitCallbacks) {
+                    commitCallbacks.remove(msg.startTimestamp);
+                }
+                cb.error(e);
+            }
+        });
     }
 
-    public void prepareCommit(long transactionId, PrepareCommit msg, PrepareCallback cb) throws IOException {
+    public void prepareCommit(long transactionId, PrepareCommit msg, PingPongCallback<PrepareResponse> cb) throws IOException {
         if (msg.writtenRows.length == 0) {
             msg.readRows = EMPTY_ROWS;
         }
-        withConnection(new PrepareOp(transactionId, msg, cb));
+        synchronized(prepareCallbacks) {
+            if (prepareCallbacks.containsKey(transactionId)) {
+                throw new IOException("Already preparing transaction " + transactionId);
+            }
+            prepareCallbacks.put(transactionId, cb); 
+        }
+        withConnection(new SyncMessageOp<PrepareCommit>(msg, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(prepareCallbacks) {
+                    prepareCallbacks.remove(msg.startTimestamp);
+                }
+                cb.error(e);
+            }
+        });
     }
 
-    public void completeAbort(long transactionId, AbortCompleteCallback cb) throws IOException {
-        withConnection(new AbortCompleteOp(transactionId, cb));
+    public void completeAbort(long transactionId, PingCallback cb) throws IOException {
+        FullAbortReport msg = new FullAbortReport();
+        msg.startTimestamp = transactionId;
+        withConnection(new SyncMessageOp<FullAbortReport>(msg, cb) {
+            @Override
+            public void error(Exception e) {
+                cb.error(e);
+            }
+        });
     }
 
     //call this function after the reincarnation is complete
     //it sends a report to the tso
-    public void completeReincarnation(long transactionId, ReincarnationCompleteCallback cb) throws IOException {
-        withConnection(new ReincarnationCompleteOp(transactionId, cb));
+    public void completeReincarnation(long transactionId, PingCallback cb) throws IOException {
+        ReincarnationReport msg = new ReincarnationReport();
+        msg.startTimestamp = transactionId;
+        withConnection(new SyncMessageOp<ReincarnationReport>(msg, cb) {
+            @Override
+            public void error(Exception e) {
+                cb.error(e);
+            }
+        });
     }
 
     @Override
@@ -575,17 +420,18 @@ public class TSOClient extends SimpleChannelHandler {
 
         Statistics.partialReport(Statistics.Tag.ASKTSO, 1);
         askedTSO++;
-        SyncCommitQueryCallback cb = new SyncCommitQueryCallback();
+        PingPongCallback<CommitQueryResponse> cb = new PingPongCallback<CommitQueryResponse>();
         isCommitted(startTimestamp, transaction, cb);
         try {
             cb.await();
         } catch (InterruptedException e) {
             throw new IOException("Commit query didn't complete", e);
         }
-        if (!cb.isAClearAnswer())
+        CommitQueryResponse pong = cb.getPong();
+        if (pong.retry == true)///isNotAClearAnswer()
             //TODO: throw a proper exception
             throw new IOException("Either abort or retry the transaction");
-        return cb.isCommitted() ? cb.commitTimestamp() : INVALID_READ;
+        return pong.committed ? pong.commitTimestamp : INVALID_READ;
     }
 
     /**
@@ -599,7 +445,7 @@ public class TSOClient extends SimpleChannelHandler {
         Object msg = e.getMessage();
         if (msg instanceof CommitResponse) {
             CommitResponse r = (CommitResponse)msg;
-            CommitCallback cb = null;
+            PingPongCallback<CommitResponse> cb = null;
             synchronized (commitCallbacks) {
                 cb = commitCallbacks.remove(r.startTimestamp);
             }
@@ -607,10 +453,10 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Received a commit response for a nonexisting commit");
                 return;
             }
-            cb.complete(r.committed ? Result.OK : Result.ABORTED, r.commitTimestamp, r.rowsWithWriteWriteConflict);
+            cb.complete(r);
         } else if (msg instanceof PrepareResponse) {
             PrepareResponse r = (PrepareResponse)msg;
-            PrepareCallback cb = null;
+            PingPongCallback<PrepareResponse> cb = null;
             synchronized (prepareCallbacks) {
                 cb = prepareCallbacks.remove(r.startTimestamp);
             }
@@ -618,9 +464,9 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Received a prepare response for a nonexisting prepare");
                 return;
             }
-            cb.complete(r.committed ? Result.OK : Result.ABORTED);
+            cb.complete(r);
         } else if (msg instanceof TimestampResponse) {
-            CreateCallback cb = createCallbacks.poll();
+            PingPongCallback<TimestampResponse> cb = createCallbacks.poll();
             long timestamp = ((TimestampResponse)msg).timestamp;
             if (!hasConnectionTimestamp || timestamp < connectionTimestamp) {
                 hasConnectionTimestamp = true;
@@ -630,7 +476,7 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Receiving a timestamp response, but none requested: " + timestamp);
                 return;
             }
-            cb.complete(timestamp);
+            cb.complete((TimestampResponse)msg);
         } else if (msg instanceof CommitQueryResponse) {
             CommitQueryResponse r = (CommitQueryResponse)msg;
             if (r.commitTimestamp != 0) {
@@ -638,7 +484,7 @@ public class TSOClient extends SimpleChannelHandler {
             } else if (r.committed) {
                 committed.commit(r.queryTimestamp, largestDeletedTimestamp);
             }
-            List<CommitQueryCallback> cbs = null;
+            List<PingPongCallback<CommitQueryResponse>> cbs = null;
             synchronized (isCommittedCallbacks) {
                 cbs = isCommittedCallbacks.remove(r.startTimestamp);
             }
@@ -646,8 +492,8 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Received a commit query response for a nonexisting request");
                 return;
             }
-            for (CommitQueryCallback cb : cbs) {
-                cb.complete(r.committed, r.commitTimestamp, r.retry);
+            for (PingPongCallback<CommitQueryResponse> cb : cbs) {
+                cb.complete(r);
             }
         } else if (msg instanceof CommittedTransactionReport) {
             CommittedTransactionReport ctr = (CommittedTransactionReport) msg;
@@ -731,22 +577,22 @@ public class TSOClient extends SimpleChannelHandler {
             o = queuedOps.poll();
         }
         synchronized (createCallbacks) {
-            for (CreateCallback cb : createCallbacks) {
+            for (PingPongCallback<TimestampResponse> cb : createCallbacks) {
                 cb.error(e);
             }
             createCallbacks.clear();
         }
 
         synchronized(commitCallbacks) {
-            for (CommitCallback cb : commitCallbacks.values()) {
+            for (PingPongCallback<CommitResponse> cb : commitCallbacks.values()) {
                 cb.error(e);
             } 
             commitCallbacks.clear();
         }
 
         synchronized(isCommittedCallbacks) {
-            for (List<CommitQueryCallback> cbs : isCommittedCallbacks.values()) {
-                for (CommitQueryCallback cb : cbs) {
+            for (List<PingPongCallback<CommitQueryResponse>> cbs : isCommittedCallbacks.values()) {
+                for (PingPongCallback<CommitQueryResponse> cb : cbs) {
                     cb.error(e);
                 }
             } 

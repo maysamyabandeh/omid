@@ -34,16 +34,15 @@ import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.Channels;
 import org.jboss.netty.channel.ExceptionEvent;
 
-import com.yahoo.omid.client.SyncAbortCompleteCallback;
-import com.yahoo.omid.client.SyncCommitCallback;
-import com.yahoo.omid.client.SyncCommitQueryCallback;
-import com.yahoo.omid.client.SyncCreateCallback;
-import com.yahoo.omid.client.SyncPrepareCallback;
+import com.yahoo.omid.client.PingCallback;
+import com.yahoo.omid.client.PingPongCallback;
 import com.yahoo.omid.client.TSOClient;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
+import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.PrepareResponse;
@@ -95,18 +94,18 @@ public class TestClientHandler extends TSOClient {
    public void sendMessage(Object msg) throws IOException {
       if (msg instanceof CommitRequest) {
          CommitRequest cr = (CommitRequest) msg;
-         commit(cr.startTimestamp, cr, new SyncCommitCallback());
+         commit(cr.startTimestamp, cr, new PingPongCallback<CommitResponse>());
       } else if (msg instanceof TimestampRequest) {
-         getNewTimestamp(new SyncCreateCallback());
+         getNewTimestamp(new PingPongCallback<TimestampResponse>());
       } else if (msg instanceof CommitQueryRequest) {
          CommitQueryRequest cqr = (CommitQueryRequest) msg;
-         isCommitted(cqr.startTimestamp, cqr.queryTimestamp, new SyncCommitQueryCallback());
+         isCommitted(cqr.startTimestamp, cqr.queryTimestamp, new PingPongCallback<CommitQueryResponse>());
       } else if (msg instanceof FullAbortReport) {
          FullAbortReport atr = (FullAbortReport) msg;
-         completeAbort(atr.startTimestamp, new SyncAbortCompleteCallback());
+         completeAbort(atr.startTimestamp, new PingCallback());
       } else if (msg instanceof PrepareCommit) {
          PrepareCommit atr = (PrepareCommit) msg;
-         prepareCommit(atr.startTimestamp, atr, new SyncPrepareCallback());
+         prepareCommit(atr.startTimestamp, atr, new PingPongCallback<PrepareResponse>());
       }
    }
 
@@ -132,7 +131,7 @@ public class TestClientHandler extends TSOClient {
          CommitResponse cr = (CommitResponse) msg;
          if (!cr.committed && autoFullAbort) {
             try {
-               completeAbort(cr.startTimestamp, new SyncAbortCompleteCallback());
+               completeAbort(cr.startTimestamp, new PingCallback());
             } catch (IOException e) {
                logger.log(Level.SEVERE, "Could not send Abort Complete mesagge.", e.getCause());
             }

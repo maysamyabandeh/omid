@@ -18,6 +18,8 @@ package com.yahoo.omid.client;
 
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.Statistics;
 
 import java.io.IOException;
@@ -69,7 +71,7 @@ public class TransactionManager {
      * @throws TransactionException
      */
     public TransactionState beginTransaction() throws TransactionException {
-        SyncCreateCallback cb = new SyncCreateCallback();
+        PingPongCallback<TimestampResponse> cb = new PingPongCallback<TimestampResponse>();
         try {
             tsoclient.getNewTimestamp(cb);
             cb.await();
@@ -80,8 +82,9 @@ public class TransactionManager {
             throw new TransactionException("Error retrieving timestamp", cb.getException());
         }      
 
-        tsoclient.aborted.aTxnStarted(cb.getStartTimestamp());
-        return new TransactionState(cb.getStartTimestamp(), tsoclient);
+        TimestampResponse pong = cb.getPong();
+        tsoclient.aborted.aTxnStarted(pong.timestamp);
+        return new TransactionState(pong.timestamp, tsoclient);
     }
 
     /**
@@ -98,7 +101,7 @@ public class TransactionManager {
         if (LOG.isTraceEnabled()) {
             LOG.trace("tryCommit " + transactionState.getStartTimestamp());
         }
-        SyncCommitCallback cb = new SyncCommitCallback();
+        PingPongCallback<CommitResponse> cb = new PingPongCallback<CommitResponse>();
         try {
             CommitRequest msg = new CommitRequest(transactionState.getStartTimestamp(),
                     transactionState.getWrittenRows(),
@@ -112,23 +115,24 @@ public class TransactionManager {
             throw new TransactionException("Error committing", cb.getException());
         }      
 
+        CommitResponse pong = cb.getPong();
         if (LOG.isTraceEnabled()) {
             LOG.trace("doneCommit " + transactionState.getStartTimestamp() +
-                    " TS_c: " + cb.getCommitTimestamp() +
-                    " Success: " + (cb.getResult() == TSOClient.Result.OK));
+                    " TS_c: " + pong.commitTimestamp +
+                    " Success: " + pong.committed);
         }
 
         tsoclient.aborted.aTxnFinished(transactionState.getStartTimestamp());
 
-        if (cb.getResult() == TSOClient.Result.ABORTED) {
+        if (!pong.committed) {
             cleanup(transactionState);
             throw new CommitUnsuccessfulException();
         }
-        transactionState.setCommitTimestamp(cb.getCommitTimestamp());
-        if (cb.isElder()) {
-            reincarnate(transactionState, cb.getWWRows());
+        transactionState.setCommitTimestamp(pong.commitTimestamp);
+        if (pong.isElder()) {
+            reincarnate(transactionState, pong.rowsWithWriteWriteConflict);
             try {
-                transactionState.tsoclient.completeReincarnation(transactionState.getStartTimestamp(), new SyncReincarnationCompleteCallback());
+                transactionState.tsoclient.completeReincarnation(transactionState.getStartTimestamp(), PingCallback.DUMMY);
             } catch (IOException e) {
                 LOG.error("Couldn't send reincarnation report", e);
             }
@@ -227,9 +231,8 @@ public class TransactionManager {
                 throw new TransactionException("Could not clean up for table " + entry.getKey(), ioe);
             }
         }
-        AbortCompleteCallback cb = new SyncAbortCompleteCallback();
         try {
-            tsoclient.completeAbort(transactionState.getStartTimestamp(), cb );
+            tsoclient.completeAbort(transactionState.getStartTimestamp(), PingCallback.DUMMY );
         } catch (IOException ioe) {
             throw new TransactionException("Could not notify TSO about cleanup completion for transaction " +
                     transactionState.getStartTimestamp(), ioe);

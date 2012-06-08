@@ -16,3 +16,36 @@
 
 package com.yahoo.omid.client;
 
+
+import java.util.concurrent.CountDownLatch;
+
+public class PingCallback implements Callback {
+   private Exception e = null;
+   private CountDownLatch latch = new CountDownLatch(1);;
+
+   public Exception getException() {
+      return e;
+   }
+
+   synchronized
+   public void error(Exception e) {
+      this.e = e;
+      countDown();
+   }
+
+    synchronized
+        public void complete() {
+            countDown();
+        }
+
+   protected void countDown() {
+      latch.countDown();
+   }
+   
+   public void await() throws InterruptedException {
+      latch.await();
+   }
+
+   public static final PingCallback DUMMY = new PingCallback();
+}
+
