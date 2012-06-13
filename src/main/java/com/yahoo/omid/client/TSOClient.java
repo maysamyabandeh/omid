@@ -602,7 +602,6 @@ public class TSOClient extends SimpleChannelHandler {
 
     protected void processMessage(TSOMessage msg) {
         // TODO Auto-generated method stub
-
     }
 
 }

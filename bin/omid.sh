@@ -59,12 +59,31 @@ fi
 
 echo running with $NMSG outstanding messages and $NCLIENTS clients
 echo MAX_ROWS = $MAX_ROWS
-    exec java -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TransactionClient localhost 1234 1000000 $NMSG $NCLIENTS $MAX_ROWS
+    exec java -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient localhost 1234 -zk localhost:2181 1000000 $NMSG $NCLIENTS $MAX_ROWS
 }
 
 bktest() {
-    exec java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.bookkeeper.util.LocalBookKeeper 5
+    #turn monitor on to let fg work
+    set -m
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.bookkeeper.util.LocalBookKeeper 5 &
+    #wait for zk to be listening
+    sleep 1
+    initzk
+    fg
 }
+
+initzk() {
+    echo Registers the sequencer in the ZooKeeper
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer b ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/ip localhost ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 1233 ;
+    echo Registers the SOs in the ZooKeeper
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos b ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0 b ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/ip localhost ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/port 1234 ;
+}
+
 
 tranhbase() {
     pwd
