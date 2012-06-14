@@ -76,7 +76,7 @@ initzk() {
     echo Registers the sequencer in the ZooKeeper
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer b ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/ip localhost ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 1233 ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 1234 ;
     echo Registers the SOs in the ZooKeeper
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos b ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0 b ;

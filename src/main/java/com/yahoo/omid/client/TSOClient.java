@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.Properties;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -34,7 +35,6 @@ import java.util.concurrent.Executors;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
 import org.jboss.netty.bootstrap.ClientBootstrap;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFactory;
@@ -158,7 +158,7 @@ public class TSOClient extends SimpleChannelHandler {
     public final long getEldest() {
         return eldest;
     }
-    public TSOClient(Configuration conf) throws IOException {
+    public TSOClient(Properties conf) throws IOException {
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
         retryTimer = new Timer(true);
@@ -177,7 +177,8 @@ public class TSOClient extends SimpleChannelHandler {
         // Create the bootstrap
         bootstrap = new ClientBootstrap(factory);
 
-        int executorThreads = conf.getInt("tso.executor.threads", 3);
+        String tmp = conf.getProperty("tso.executor.threads", "3");
+        int executorThreads = Integer.parseInt(tmp);
 
         bootstrap.getPipeline().addLast("executor", new ExecutionHandler(
                     new OrderedMemoryAwareThreadPoolExecutor(executorThreads, 1024*1024, 4*1024*1024)));
@@ -187,10 +188,13 @@ public class TSOClient extends SimpleChannelHandler {
         bootstrap.setOption("reuseAddress", true);
         bootstrap.setOption("connectTimeoutMillis", 100);
 
-        String host = conf.get("tso.host");
-        int port = conf.getInt("tso.port", 1234);
-        max_retries = conf.getInt("tso.max_retries", 10);
-        retry_delay_ms = conf.getInt("tso.retry_delay_ms", 3000); 
+        String host = conf.getProperty("tso.host");
+        tmp = conf.getProperty("tso.port", "1234");
+        int port = Integer.parseInt(tmp);
+        tmp = conf.getProperty("tso.max_retries", "10");
+        max_retries = Integer.parseInt(tmp);
+        tmp = conf.getProperty("tso.retry_delay_ms", "3000"); 
+        retry_delay_ms = Integer.parseInt(tmp);
 
         if (host == null) {
             throw new IOException("tso.host missing from configuration");
