@@ -61,6 +61,7 @@ import com.yahoo.omid.tso.messages.ReincarnationReport;
 import com.yahoo.omid.tso.messages.FailedElderReport;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
+import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
@@ -196,13 +197,25 @@ public class TSOHandler extends SimpleChannelHandler {
     public void handle(TimestampRequest msg, ChannelHandlerContext ctx) {
         long timestamp;
         synchronized (sharedState) {
-            try {
-                synchronized (sharedState.toWAL) {
-                    timestamp = timestampOracle.next(sharedState.toWAL);
+            //If the message is sequenced and out of order, reject it
+            if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
+                //System.out.println(msg.sequence + " < " + sharedState.lastServicedSequence);
+                timestamp = -1;
+            }
+            else {
+                if (msg.isSequenced())
+                    sharedState.lastServicedSequence = msg.sequence;
+                try {
+                    synchronized (sharedState.toWAL) {
+                        timestamp = timestampOracle.next(sharedState.toWAL);
+                    }
+                    //if we do not want to keep track of the commit, simply set it finished
+                    if (!msg.trackProgress)
+                        sharedState.uncommited.finished(timestamp);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    return;
                 }
-            } catch (IOException e) {
-                e.printStackTrace();
-                return;
             }
         }
 
@@ -271,6 +284,17 @@ public class TSOHandler extends SimpleChannelHandler {
         synchronized (sharedState) {
             sharedState.uncommited.finished(msg.startTimestamp);
         }
+        /*
+        synchronized (sharedState) {
+            //If the message is sequenced and out of order, reject it
+            if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
+                //System.out.println(msg.sequence + " < " + sharedState.lastServicedSequence);
+                timestamp = -1;
+            }
+            if (msg.isSequenced())
+                sharedState.lastServicedSequence = msg.sequence;
+        }
+        */
         sortRows(msg.readRows, msg.writtenRows);
         if (msg.prepared)
             reply.committed = msg.successfulPrepared;

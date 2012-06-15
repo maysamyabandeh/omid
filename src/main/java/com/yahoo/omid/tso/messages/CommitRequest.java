@@ -37,6 +37,17 @@ public class CommitRequest implements TSOMessage {
     public long startTimestamp;
 
     /**
+     * is this request sequenced and if yes what is the sequence number
+     * -1 means no sequence
+     */
+    public long sequence = -1;
+
+    public boolean isSequenced() {
+        return sequence != -1;
+    }
+
+
+    /**
      * Is the commit prepared, or it needs prepration on the hashmap
      */
     public boolean prepared = false;
@@ -98,6 +109,10 @@ public class CommitRequest implements TSOMessage {
         for (int i = 0; i < size; i++) {
             readRows[i] = RowKey.readObject(aInputStream);
         }
+        byte s = aInputStream.readByte();
+        if (s == 1) { //isSequenced
+            sequence = aInputStream.readLong();
+        }
     }
 
     @Override
@@ -116,6 +131,12 @@ public class CommitRequest implements TSOMessage {
         aOutputStream.writeInt(readRows.length);
         for (RowKey r: readRows) {
             r.writeObject(aOutputStream);
+        }
+        if (isSequenced()) {
+            aOutputStream.writeByte(1);
+            aOutputStream.writeLong(sequence);
+        } else {
+            aOutputStream.writeByte(0);
         }
     }
 }

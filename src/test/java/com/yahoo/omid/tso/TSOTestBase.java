@@ -35,6 +35,7 @@ import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 
+import com.yahoo.omid.client.SimClient;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 
@@ -59,23 +60,26 @@ public class TSOTestBase {
 
       // *** Start the Netty configuration ***
       
-      Configuration conf = HBaseConfiguration.create();
-      conf.set("tso.host", "localhost");
-      conf.setInt("tso.port", 1234);
+       java.util.Properties conf = new java.util.Properties();
+      conf.setProperty("tso.host", "localhost");
+      conf.setProperty("tso.port", "1234");
+      //Configuration conf = HBaseConfiguration.create();
+      //conf.set("tso.host", "localhost");
+      //conf.setInt("tso.port", 1234);
 
       // Start client with Nb of active threads = 3 as maximum.
       channelFactory = new NioClientSocketChannelFactory(Executors.newCachedThreadPool(),
             Executors.newCachedThreadPool(), 3);
       // Create the bootstrap
       // Create the global ChannelGroup
-      channelGroup = new DefaultChannelGroup(TransactionClient.class.getName());
+      channelGroup = new DefaultChannelGroup(SimClient.class.getName());
       // Create the associated Handler
       clientHandler = new TestClientHandler(conf);
 
       // *** Start the Netty running ***
 
-      System.out.println("PARAM MAX_ROW: " + ClientHandler.MAX_ROW);
-      System.out.println("PARAM DB_SIZE: " + ClientHandler.DB_SIZE);
+      //System.out.println("PARAM MAX_ROW: " + SimClient.MAX_ROW);
+      //System.out.println("PARAM DB_SIZE: " + SimClient.DB_SIZE);
 
       // Connect to the server, wait for the connection and get back the channel
       clientHandler.await();
@@ -85,8 +89,8 @@ public class TSOTestBase {
 
       // *** Start the Netty running ***
 
-      System.out.println("PARAM MAX_ROW: " + ClientHandler.MAX_ROW);
-      System.out.println("PARAM DB_SIZE: " + ClientHandler.DB_SIZE);
+      //System.out.println("PARAM MAX_ROW: " + SimClient.MAX_ROW);
+      //System.out.println("PARAM DB_SIZE: " + SimClient.DB_SIZE);
    }
    
    public static void teardownClient() {

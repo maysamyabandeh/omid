@@ -53,9 +53,15 @@ public class TransactionManager {
 
     public TransactionManager(Configuration conf) throws TransactionException, IOException {
         this.conf = conf;
+        java.util.Iterator<Map.Entry<String,String>> confIterator = conf.iterator();
+        java.util.Properties prop = new java.util.Properties();
+        while (confIterator.hasNext()) {
+            Map.Entry<String,String> next = confIterator.next();
+            prop.setProperty(next.getKey(), next.getValue());
+        }
         synchronized (lock) {
             if (tsoclient == null) {
-                tsoclient = new TSOClient(conf);
+                tsoclient = new TSOClient(prop);
             }
         }
         tableCache = new HashMap<byte[], HTable>();
@@ -77,10 +83,10 @@ public class TransactionManager {
             cb.await();
         } catch (Exception e) {
             throw new TransactionException("Could not get new timestamp", e);
-        } 
+        }
         if (cb.getException() != null) {
             throw new TransactionException("Error retrieving timestamp", cb.getException());
-        }      
+        }
 
         TimestampResponse pong = cb.getPong();
         tsoclient.aborted.aTxnStarted(pong.timestamp);

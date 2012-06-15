@@ -36,6 +36,16 @@ public class TimestampResponse implements TSOMessage {
     */
    public long timestamp;
 
+   public boolean isFailed() {
+       return timestamp == -1;
+   }
+
+    public static TimestampResponse failedResponse() {
+        TimestampResponse tr = new TimestampResponse();
+        tr.timestamp = -1;//means failed
+        return tr;
+    }
+
    /**
     * Constructor from timestamp
     * 

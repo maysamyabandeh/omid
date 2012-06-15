@@ -38,8 +38,10 @@ import com.yahoo.omid.IsolationLevel;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import org.jboss.netty.channel.Channel;
 import java.io.IOException;
@@ -50,6 +52,7 @@ import org.jboss.netty.channel.Channels;
 import java.util.concurrent.TimeUnit;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelFuture;
+import java.util.concurrent.CountDownLatch;
 
 
 /**
@@ -67,6 +70,11 @@ public class SimClient {
      * Maximum number of modified rows in each transaction
      */
     static int MAX_ROW = 20;
+
+    /**
+     * How much wait between connect and launching the traffic
+     */
+    static int WAIT_AFTER_CONNECT = 1000;//15000
 
     /**
      * The number of rows in database
@@ -101,7 +109,7 @@ public class SimClient {
     /**
      * The interface to the tso
      */
-    TSOClient[] tsoClients;
+    SimTSOClient[] tsoClients;
     /**
      * The interface to the sequencer
      */
@@ -118,9 +126,11 @@ public class SimClient {
     private Date stopDate = null;
 
     /**
-     * Return value for the caller
+     * Barrier for all clients to be finished
      */
-    final BlockingQueue<Boolean> answer = new LinkedBlockingQueue<Boolean>();
+    CountDownLatch latch;
+
+    private java.util.Random rnd;
 
     /**
      * Method to wait for the final response
@@ -128,13 +138,22 @@ public class SimClient {
      * @return success or not
      */
     public boolean waitForAll() {
-        for (;;) {
+        while (latch.getCount() > 0) {
             try {
-                return answer.take();
+                latch.await();
             } catch (InterruptedException e) {
                 // Ignore.
             }
         }
+        stopDate = new Date();
+        String MB = String.format("Memory Used: %8.3f MB", (Runtime.getRuntime().totalMemory() - Runtime.getRuntime()
+                    .freeMemory()) / 1048576.0);
+        //String Mbs = String.format("%9.3f TPS",
+                //((nbMessage - curMessage) * 1000 / (float) (stopDate.getTime() - (startDate != null ? startDate.getTime()
+                        //: 0))));
+        //TODO: make curMessage global
+        //System.out.println(MB + " " + Mbs);
+        return true;
     }
 
     /**
@@ -142,26 +161,22 @@ public class SimClient {
      */
     public SimClient(Properties[] soConfs, Properties sequencerConf) throws IOException {
         try {
+            latch = new CountDownLatch(1 + soConfs.length);
             sequencerClient = new SimSequencerClient(sequencerConf);
             tsoClients = new SimTSOClient[soConfs.length];
             for (int i = 0; i < soConfs.length; i++) {
                 tsoClients[i] = new SimTSOClient(soConfs[i]);
             }
         } catch (IOException e) {
-            answer.offer(false);
+            latch = new CountDownLatch(0);
         }
     }
 
-    class SimSequencerClient extends TSOClient {
-        /**
-         * Current rank (decreasing, 0 is the end of the game)
-         */
-        private long curMessage;
-
+    class SimSequencerClient extends SimTSOClient {
         public SimSequencerClient(Properties conf) throws IOException {
             super(conf);
-            this.curMessage = nbMessage;
         }
+
         /**
          * Starts the traffic
          */
@@ -169,7 +184,8 @@ public class SimClient {
         public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
             super.channelConnected(ctx, e);
             try {
-                Thread.sleep(15000);
+                //wait for other clients to connect
+                Thread.sleep(WAIT_AFTER_CONNECT);
             } catch (InterruptedException e1) {
                 //ignore
             }
@@ -178,34 +194,95 @@ public class SimClient {
             seed *= e.getChannel().getId();// to make it channel dependent
             rnd = new java.util.Random(seed);
             //Starts the traffic
-            startGlobalTransaction();
+            launchBenchmark();
         }
 
         /**
-         * When the channel is closed, print result
+         * Launch the benchmark
          */
         @Override
-        public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
-            super.channelClosed(ctx, e);
-            terminate();
+        protected void launchBenchmark() {
+            for (int i = 0; i < MAX_IN_FLIGHT; i++) {
+                executor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+while (curMessage > 0) {
+    curMessage--;
+    PingPongCallback<TimestampResponse> tscb = new PingPongCallback<TimestampResponse>();
+    try {
+        //1. get a sequence
+        getNewTimestamp(false, tscb);
+        tscb.await();
+        long sequence = tscb.getPong().timestamp;
+        //2. start transactions
+        PingPongCallback<TimestampResponse>[] tscbs;
+        tscbs = new PingPongCallback[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++) {
+            tscbs[i] = new PingPongCallback<TimestampResponse>();
+            tsoClients[i].getNewTimestamp(sequence, tscbs[i]);
         }
-
-        /**
-         * Furthur processing on messages
-         * @throws IOException 
-         */
-        @Override
-        protected void processMessage(TSOMessage msg) {
-            if (msg instanceof TimestampResponse) {
-                doAGlobalTransaction( ((TimestampResponse)msg).timestamp );
+        boolean failed = false;
+        for (int i = 0; i < tsoClients.length; i++) {
+            tscbs[i].await();
+            if (tscbs[i].getException() != null)
+                failed = true;
+        }
+        if (failed)
+            throw new TransactionException("Error retrieving timestamp", null);
+        //2.5 run the transation
+        ReadWriteRows[] rw = new ReadWriteRows[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++)
+            rw[i] = tsoClients[i].simulateATransaction(tscbs[i].getPong().timestamp);
+        //3. send prepares
+        PingPongCallback<PrepareResponse>[] prcbs;
+        prcbs = new PingPongCallback[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++) {
+            prcbs[i] = new PingPongCallback<PrepareResponse>();
+            long ts = tscbs[i].getPong().timestamp;
+            PrepareCommit pcmsg = new PrepareCommit(ts, rw[i].writtenRows, rw[i].readRows);
+            tsoClients[i].prepareCommit(ts, pcmsg, prcbs[i]);
+        }
+        boolean success = true;
+        for (int i = 0; i < tsoClients.length; i++) {
+            prcbs[i].await();
+            success = success && prcbs[i].getPong().committed;
+        }
+        //4. get a sequence
+        tscb = new PingPongCallback<TimestampResponse>();
+        getNewTimestamp(false, tscb);
+        tscb.await();
+        sequence = tscb.getPong().timestamp;
+        //5. commit
+        PingPongCallback<CommitResponse>[] crcbs;
+        crcbs = new PingPongCallback[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++) {
+            crcbs[i] = new PingPongCallback<CommitResponse>();
+            long ts = tscbs[i].getPong().timestamp;
+            CommitRequest crmsg = new CommitRequest(ts, rw[i].writtenRows, rw[i].readRows);
+            crmsg.prepared = true;
+            crmsg.sequence = sequence;
+            crmsg.successfulPrepared = success;
+            tsoClients[i].sendCommitRequest(crmsg, crcbs[i]);
+        }
+        failed = false;
+        for (int i = 0; i < tsoClients.length; i++) {
+            crcbs[i].await();
+            if (crcbs[i].getException() != null)
+                failed = true;
+        }
+        if (failed)
+            throw new TransactionException("Error retrieving timestamp", null);
+    } catch (TransactionException e) {
+        System.out.print("-");
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    } catch (IOException e) {
+        LOG.error("Couldn't start transaction", e);
+    }
+}
+                    }
+                });
             }
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
-            e.getCause().printStackTrace();
-            answer.offer(false);
-            Channels.close(e.getChannel());
         }
     }
 
@@ -213,21 +290,15 @@ public class SimClient {
         /**
          * Current rank (decreasing, 0 is the end of the game)
          */
-        private long curMessage;
+        long curMessage;
 
         /*
          * For statistial purposes
          */
-        ConcurrentHashMap<Long, Long> wallClockTime = new ConcurrentHashMap<Long, Long>(); 
+        ConcurrentHashMap<Long, Long> wallClockTime = new ConcurrentHashMap<Long, Long>();
         public long totalNanoTime = 0;
         public long totalTx = 0;
-
-        /**
-         * number of outstanding commit requests
-         */
-        private int outstandingTransactions = 0;
-
-        private long totalCommitRequestSent;// just to keep the total number of commitreqeusts sent
+        private long totalSimulatedTxns = 0;
 
         public SimTSOClient(Properties conf) throws IOException {
             super(conf);
@@ -241,29 +312,26 @@ public class SimClient {
         public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
             super.channelConnected(ctx, e);
             try {
-                Thread.sleep(15000);
+                //wait for other clients to connect
+                Thread.sleep(WAIT_AFTER_CONNECT);
             } catch (InterruptedException e1) {
                 //ignore
             }
-            //Starts the traffic
-            startTransaction();
+            //launchBenchmark();
         }
 
-        /*
+        /**
+         * When the channel is closed, print result
+         */
         @Override
-        protected void processMessage(TSOMessage msg) {
-            if (msg instanceof CommitResponse) {
-                handle((CommitResponse) msg);
-            } else if (msg instanceof TimestampResponse) {
-                sendCommitRequest( ((TimestampResponse)msg).timestamp );
-            }
+        public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e) throws Exception {
+            super.channelClosed(ctx, e);
+            latch.countDown();
         }
-        */
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
             e.getCause().printStackTrace();
-            answer.offer(false);
             Channels.close(e.getChannel());
         }
 
@@ -273,7 +341,54 @@ public class SimClient {
          * @param timestamp
          * @param channel
          */
+        public void sendCommitRequest(CommitRequest msg, final PingPongCallback<CommitResponse> tccb) {
+            //if (slowchance == -1) {
+            //slowchance = rnd.nextInt(10);
+            //if (slowchance == 0)
+            //System.out.println("I am slow");
+            //}
+            long randompausetime = pauseClient ? PAUSE_LENGTH : 0; //this is the average
+            double uniformrandom = rnd.nextDouble(); //[0,1)
+            //double geometricrandom = -1 * java.lang.Math.log(uniformrandom);
+            //randompausetime = (long) (randompausetime * geometricrandom);
+            randompausetime = (long) (randompausetime * 2 * uniformrandom);
+            //if (slowchance == 0)
+            //randompausetime = 1000 * randompausetime;
+            try {
+                Thread.sleep(randompausetime / 1000);//millisecond
+            } catch (InterruptedException e1) {
+                //ignore
+            }
+            // keep statistics
+            wallClockTime.put(msg.startTimestamp, System.nanoTime());
+            try {
+                commit(msg.startTimestamp, msg, tccb);
+            } catch (IOException e) {
+                LOG.error("Couldn't send commit", e);
+                e.printStackTrace();
+            }
+        }
+
+        /**
+         * Sends the CommitRequest message to the channel
+         * 
+         * @param timestamp
+         * @param channel
+         */
         private void sendCommitRequest(final long timestamp, final PingPongCallback<CommitResponse> tccb) {
+            RowKey [] writtenRows, readRows;
+            ReadWriteRows rw = simulateATransaction(timestamp);
+            CommitRequest crmsg = new CommitRequest(timestamp, rw.writtenRows, rw.readRows);
+            sendCommitRequest(crmsg, tccb);
+        }
+
+        /**
+         * Sends the CommitRequest message to the channel
+         * 
+         * @param timestamp
+         * @param channel
+         */
+         ReadWriteRows simulateATransaction(long timestamp) {
             // initialize rnd if it is not yet
             assert(rnd != null);
 
@@ -309,8 +424,8 @@ public class SimClient {
             }
 
             // send a query once in a while
-            totalCommitRequestSent++;
-            if (totalCommitRequestSent % QUERY_RATE == 0 && writtenRows.length > 0) {
+            totalSimulatedTxns++;
+            if (totalSimulatedTxns % QUERY_RATE == 0 && writtenRows.length > 0) {
                 long queryTimeStamp = rnd.nextInt(Math.abs((int) timestamp));
                 try {
                     isCommitted(timestamp, queryTimeStamp, new PingPongCallback<CommitQueryResponse>());
@@ -318,45 +433,21 @@ public class SimClient {
                     LOG.error("Couldn't send commit query", e);
                 }
             }
+            return new ReadWriteRows(readRows, writtenRows);
+        }
 
-            //if (slowchance == -1) {
-            //slowchance = rnd.nextInt(10);
-            //if (slowchance == 0)
-            //System.out.println("I am slow");
-            //}
-
-            long randompausetime = pauseClient ? PAUSE_LENGTH : 0; //this is the average
-            double uniformrandom = rnd.nextDouble(); //[0,1)
-            //double geometricrandom = -1 * java.lang.Math.log(uniformrandom);
-            //randompausetime = (long) (randompausetime * geometricrandom);
-            randompausetime = (long) (randompausetime * 2 * uniformrandom);
-            //if (slowchance == 0)
-            //randompausetime = 1000 * randompausetime;
-
-            try {
-                Thread.sleep(randompausetime / 1000);//millisecond
-            } catch (InterruptedException e1) {
-                //ignore
-            }
-
-            // keep statistics
-            wallClockTime.put(timestamp, System.nanoTime());
-            try {
-                CommitRequest msg = new CommitRequest(timestamp, writtenRows, readRows);
-                commit(timestamp, msg, tccb);
-            } catch (IOException e) {
-                LOG.error("Couldn't send commit", e);
-                e.printStackTrace();
+        class ReadWriteRows {
+            RowKey[] readRows, writtenRows;
+            ReadWriteRows(RowKey[] r, RowKey[] w) {
+                readRows = r;
+                writtenRows = w;
             }
         }
 
         /**
-         * Start a new transaction
-         * 
-         * @param channel
-         * @throws IOException 
+         * Launch the benchmark
          */
-        private void startTransaction() {
+        protected void launchBenchmark() {
             for (int i = 0; i < MAX_IN_FLIGHT; i++) {
                 executor.execute(new Runnable() {
                     @Override
@@ -389,9 +480,7 @@ public class SimClient {
         private long lasttotalTx = 0;
         private long lasttotalNanoTime = 0;
         private long lastTimeout = System.currentTimeMillis();
-        public void handle(CommitResponse msg) {
-            // outstandingTransactions.decrementAndGet();
-            outstandingTransactions--;
+        private void handle(CommitResponse msg) {
             long finishNanoTime = System.nanoTime();
             long startNanoTime = wallClockTime.remove(msg.startTimestamp);
             if (msg.committed) {
@@ -437,26 +526,9 @@ public class SimClient {
 
     }
 
-    private java.util.Random rnd;
-
     //static int slowchance = -1;
 
     private void startGlobalTransaction() {
-    }
-
-    public void doAGlobalTransaction(long globalTs) {
-    }
-
-    void terminate() {
-        stopDate = new Date();
-        String MB = String.format("Memory Used: %8.3f MB", (Runtime.getRuntime().totalMemory() - Runtime.getRuntime()
-                    .freeMemory()) / 1048576.0);
-        //String Mbs = String.format("%9.3f TPS",
-                //((nbMessage - curMessage) * 1000 / (float) (stopDate.getTime() - (startDate != null ? startDate.getTime()
-                        //: 0))));
-        //TODO: make curMessage global
-        //System.out.println(MB + " " + Mbs);
-        answer.offer(false);
     }
 
     /**

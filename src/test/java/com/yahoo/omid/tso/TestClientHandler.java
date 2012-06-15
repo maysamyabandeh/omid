@@ -27,7 +27,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import org.apache.hadoop.conf.Configuration;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
@@ -72,7 +71,7 @@ public class TestClientHandler extends TSOClient {
    // false
    private boolean autoFullAbort = true;
    
-   public TestClientHandler(Configuration conf) throws IOException {
+   public TestClientHandler(java.util.Properties conf) throws IOException {
       super(conf);
    }
 

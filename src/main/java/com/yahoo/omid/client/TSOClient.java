@@ -158,6 +158,7 @@ public class TSOClient extends SimpleChannelHandler {
     public final long getEldest() {
         return eldest;
     }
+
     public TSOClient(Properties conf) throws IOException {
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
@@ -242,10 +243,26 @@ public class TSOClient extends SimpleChannelHandler {
     }
 
     public void getNewTimestamp(PingPongCallback<TimestampResponse> cb) throws IOException {
+        TimestampRequest tr = new TimestampRequest();
+        getNewTimestamp(tr, cb);
+    }
+
+    public void getNewTimestamp(boolean trackProgress, PingPongCallback<TimestampResponse> cb) throws IOException {
+        TimestampRequest tr = new TimestampRequest();
+        tr.trackProgress = trackProgress;
+        getNewTimestamp(tr, cb);
+    }
+
+    public void getNewTimestamp(long sequence, PingPongCallback<TimestampResponse> cb) throws IOException {
+        TimestampRequest tr = new TimestampRequest();
+        tr.sequence = sequence;
+        getNewTimestamp(tr, cb);
+    }
+
+    public void getNewTimestamp(TimestampRequest tr, PingPongCallback<TimestampResponse> cb) throws IOException {
         synchronized(createCallbacks) {
             createCallbacks.add(cb);
         }
-        TimestampRequest tr = new TimestampRequest();
         withConnection(new SyncMessageOp<TimestampRequest>(tr, cb) {
             @Override
             public void error(Exception e) {
@@ -480,7 +497,12 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Receiving a timestamp response, but none requested: " + timestamp);
                 return;
             }
-            cb.complete((TimestampResponse)msg);
+            if (((TimestampResponse)msg).isFailed()) {
+                //System.out.println("failed");
+                cb.error(new Exception("out of order sequence"));
+            }
+            else
+                cb.complete((TimestampResponse)msg);
         } else if (msg instanceof CommitQueryResponse) {
             CommitQueryResponse r = (CommitQueryResponse)msg;
             if (r.commitTimestamp != 0) {

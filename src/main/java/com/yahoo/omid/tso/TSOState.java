@@ -78,6 +78,11 @@ public class TSOState {
     * Hash map load factor
     */
    static final public float LOAD_FACTOR = 0.5f;
+
+   /**
+    * If requested are sequened, remember the last one
+    */
+   public long lastServicedSequence = -1;
    
    /**
     * Object that implements the logic to log records
