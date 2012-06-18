@@ -273,7 +273,7 @@ while (curMessage > 0) {
         if (failed)
             throw new TransactionException("Error retrieving timestamp", null);
     } catch (TransactionException e) {
-        System.out.print("-");
+        //System.out.print("-");
     } catch (InterruptedException e) {
         e.printStackTrace();
     } catch (IOException e) {

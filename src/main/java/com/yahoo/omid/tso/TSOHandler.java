@@ -87,6 +87,7 @@ public class TSOHandler extends SimpleChannelHandler {
      */
     public static int txnCnt = 0;
     public static int abortCount = 0;
+    public static int outOfOrderCnt = 0;
     public static int hitCount = 0;
     public static long queries = 0;
 
@@ -201,6 +202,7 @@ public class TSOHandler extends SimpleChannelHandler {
             if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
                 //System.out.println(msg.sequence + " < " + sharedState.lastServicedSequence);
                 timestamp = -1;
+                outOfOrderCnt++;
             }
             else {
                 if (msg.isSequenced())
@@ -279,22 +281,25 @@ public class TSOHandler extends SimpleChannelHandler {
      * Handle the CommitRequest message
      */
     private void handle(CommitRequest msg, ChannelHandlerContext ctx) {
-        CommitResponse reply = new CommitResponse(msg.startTimestamp);
         //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
         synchronized (sharedState) {
             sharedState.uncommited.finished(msg.startTimestamp);
         }
-        /*
+        boolean outOfOrder = false;
         synchronized (sharedState) {
-            //If the message is sequenced and out of order, reject it
-            if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
-                //System.out.println(msg.sequence + " < " + sharedState.lastServicedSequence);
-                timestamp = -1;
-            }
+            outOfOrder = msg.isSequenced() &&
+                msg.sequence < sharedState.lastServicedSequence;
             if (msg.isSequenced())
                 sharedState.lastServicedSequence = msg.sequence;
         }
-        */
+        //If the message is sequenced and out of order, reject it
+        if (outOfOrder) {
+            CommitResponse reply = CommitResponse.failedResponse(msg.startTimestamp);
+            outOfOrderCnt++;
+            sendResponse(ctx, reply);
+            return;
+        }
+        CommitResponse reply = new CommitResponse(msg.startTimestamp);
         sortRows(msg.readRows, msg.writtenRows);
         if (msg.prepared)
             reply.committed = msg.successfulPrepared;

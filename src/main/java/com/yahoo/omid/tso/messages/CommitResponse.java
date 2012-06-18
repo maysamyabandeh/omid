@@ -57,6 +57,16 @@ public class CommitResponse implements TSOMessage {
         return rowsWithWriteWriteConflict != null && rowsWithWriteWriteConflict.size() != 0;
     }
 
+    public boolean isFailed() {
+        return commitTimestamp == -1;
+    }
+
+    public static CommitResponse failedResponse(long ts) {
+        CommitResponse cr = new CommitResponse(ts);
+        cr.commitTimestamp = -1;//means failed
+        return cr;
+    }
+
     /**
      * Constructor from startTimestamp
      * @param t

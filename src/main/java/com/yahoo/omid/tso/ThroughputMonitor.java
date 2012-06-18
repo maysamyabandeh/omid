@@ -49,6 +49,7 @@ public class ThroughputMonitor extends Thread {
       try {
          long oldCounter = TSOHandler.txnCnt;
          long oldAbortCount = TSOHandler.abortCount;
+         long oldOutOfOrderCnt = TSOHandler.outOfOrderCnt;
          long oldHitCount = TSOHandler.hitCount;
          long startTime = System.currentTimeMillis();
          //            long oldWaitTime = TSOHandler.waitTime; 
@@ -85,6 +86,7 @@ public class ThroughputMonitor extends Thread {
             long endTime = System.currentTimeMillis();
             long newCounter = TSOHandler.txnCnt;
             long newAbortCount = TSOHandler.abortCount;
+            long newOutOfOrderCnt = TSOHandler.outOfOrderCnt;
             long newHitCount = TSOHandler.hitCount;
             //                long newWaitTime = TSOHandler.waitTime; 
             long newtotalput = CommitHashMap.gettotalput(); 
@@ -139,12 +141,13 @@ public class ThroughputMonitor extends Thread {
             if (TSOPipelineFactory.bwhandler != null) {
                 TSOPipelineFactory.bwhandler.measure();
             }
-            LOG.trace(String.format("SERVER: %4.3f TPS, %4.6f Abort/s  "
+            LOG.trace(String.format("SERVER: %4.3f TPS, %4.6f Abort/s, %4.1f rjctd/s "
                     + "1B: %2.2f 2B: %2.2f AB: %2.2f AS: %2.2f LL: %2.2f Avg commit: %2.4f Avg flush: %5.2f "
                     + "Avg write: %5.2f Tot writes: %d Avg diff flu: %5.2f Rec Bytes/s: %5.2fMBs Sent Bytes/s: %5.2fMBs %d ",
 //                    + "Abort Freqs: %s",
                     (newCounter - oldCounter) / (float)(endTime - startTime) * 1000,
                     (newAbortCount - oldAbortCount) / (float)(endTime - startTime) * 1000,
+                    (newOutOfOrderCnt - oldOutOfOrderCnt) / (float)(endTime - startTime) * 1000,
                     (new1B - old1B) / (float)(newComs - oldComs) * 100,
                     (new2B - old2B) / (float)(newComs - oldComs) * 100,
                     (newAB - oldAB) / (float)(newComs - oldComs) * 100,
@@ -162,12 +165,13 @@ public class ThroughputMonitor extends Thread {
 //                    Arrays.toString(TSOSharedMessageBuffer.freq)
                     )
               );
-            LOG.trace(String.format("SERVER: %4.3f TPS, %4.6f Abort/s  "
+            LOG.trace(String.format("SERVER: %4.3f TPS, %4.6f Abort/s, %4.1f rjctd/s "
                     + "Co: %2.2f Ha: %2.2f Fa: %2.2f Li: %2.2f Avg commit: %2.4f Avg flush: %5.2f "
                     + "Avg write: %5.2f Tot overflows: %d Tot flushes: %d Tot empty flu: %d "
                     + "Queries: %d CurrentBuffers: %d ExtraGets: %d AskedTSO: %d Tot fflushes: %d",
                     (newCounter - oldCounter) / (float)(endTime - startTime) * 1000,
                     (newAbortCount - oldAbortCount) / (float)(endTime - startTime) * 1000,
+                    (newOutOfOrderCnt - oldOutOfOrderCnt) / (float)(endTime - startTime) * 1000,
                     (newComs - oldComs) / (float)(newWrites - oldWrites) * 100,
                     (newHa - oldHa) / (float)(newWrites - oldWrites) * 100,
                     (newFa - oldFa) / (float)(newWrites - oldWrites) * 100,
@@ -200,6 +204,7 @@ public class ThroughputMonitor extends Thread {
             
             oldCounter = newCounter;
             oldAbortCount = newAbortCount;
+            oldOutOfOrderCnt = newOutOfOrderCnt;
             oldHitCount = newHitCount;
             startTime = endTime;
             //                oldWaitTime = newWaitTime;

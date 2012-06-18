@@ -474,7 +474,11 @@ public class TSOClient extends SimpleChannelHandler {
                 LOG.error("Received a commit response for a nonexisting commit");
                 return;
             }
-            cb.complete(r);
+            if (r.isFailed()) {
+                cb.error(new Exception("out of order sequence"));
+            }
+            else
+                cb.complete(r);
         } else if (msg instanceof PrepareResponse) {
             PrepareResponse r = (PrepareResponse)msg;
             PingPongCallback<PrepareResponse> cb = null;
