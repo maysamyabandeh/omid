@@ -250,14 +250,22 @@ public class DelayedOrderedExecutor extends MemoryAwareThreadPoolExecutor {
     }
 
     private final class SequencedChildExecutor extends ChildExecutor {
-        private final PriorityQueue<Runnable> tasks = 
-            new PriorityQueue<Runnable>(100, new SequencedTaskComparator());
+        class TimedTask {
+            Runnable task;
+            long time;
+            TimedTask(Runnable r, long t) {
+                task = r;
+                time = t;
+            }
+        }
+        private final PriorityQueue<TimedTask> tasks = 
+            new PriorityQueue<TimedTask>(100, new SequencedTaskComparator());
         boolean running = false;
 
-        class SequencedTaskComparator implements java.util.Comparator<Runnable> {
+        class SequencedTaskComparator implements java.util.Comparator<TimedTask> {
             @Override
-            public int compare(Runnable o1, Runnable o2) {
-                Long l = getSequence(o1) - getSequence(o2);
+            public int compare(TimedTask o1, TimedTask o2) {
+                Long l = getSequence(o1.task) - getSequence(o2.task);
                 return l.intValue();
             }
 
@@ -278,7 +286,8 @@ public class DelayedOrderedExecutor extends MemoryAwareThreadPoolExecutor {
             boolean needsExecution;
             synchronized (tasks) {
                 needsExecution = tasks.isEmpty() && !running;
-                boolean res = tasks.add(command);
+                long time = System.currentTimeMillis();
+                boolean res = tasks.add(new TimedTask(command,time));
                 assert(res == true);
             }
 
@@ -287,14 +296,25 @@ public class DelayedOrderedExecutor extends MemoryAwareThreadPoolExecutor {
             }
         }
 
+        static final long DELAY = 1;
         @Override
         public void run() {
             Thread thread = Thread.currentThread();
+            boolean doYield = false;
             for (;;) {
                 final Runnable task;
+                if (doYield) {
+                    Thread.yield();
+                    doYield = false;
+                }
                 synchronized (tasks) {
                     //task = tasks.getFirst();
-                    task = tasks.poll();
+                    long currTime = System.currentTimeMillis();
+                    if (currTime - tasks.peek().time < DELAY) {
+                        doYield = true;//do not yeild inside sync block
+                        continue;
+                    }
+                    task = tasks.poll().task;
                     running = true;
                     assert(task != null);
                 }
