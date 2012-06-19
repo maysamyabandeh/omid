@@ -108,8 +108,8 @@ public class TSOServer implements Runnable {
         System.out.println("maxThreads: " + maxThreads);
         //int maxThreads = 5;
         // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
-        ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824,
-                100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
+        //ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
+        ThreadPoolExecutor pipelineExecutor = new DelayedOrderedExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
 
         // This is the only object of timestamp oracle
         // TODO: make it singleton

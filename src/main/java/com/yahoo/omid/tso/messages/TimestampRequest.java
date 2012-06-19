@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class TimestampRequest implements TSOMessage {
+public class TimestampRequest implements TSOMessage, Sequencable {
     /**
      * should we track the progress of the timestamp that is assigned to this txn.
      * or it is just a sequence request
@@ -40,6 +40,10 @@ public class TimestampRequest implements TSOMessage {
      * -1 means no sequence
      */
     public long sequence = -1;
+
+    public long getSequence() {
+        return sequence;
+    }
 
     public boolean isSequenced() {
         return sequence != -1;

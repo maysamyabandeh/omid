@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class CommitRequest implements TSOMessage {
+public class CommitRequest implements TSOMessage, Sequencable {
 
     /**
      * Starting timestamp
@@ -42,10 +42,13 @@ public class CommitRequest implements TSOMessage {
      */
     public long sequence = -1;
 
+    public long getSequence() {
+        return sequence;
+    }
+
     public boolean isSequenced() {
         return sequence != -1;
     }
-
 
     /**
      * Is the commit prepared, or it needs prepration on the hashmap
