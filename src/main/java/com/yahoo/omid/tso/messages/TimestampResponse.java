@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  * 
  */
-public class TimestampResponse implements TSOMessage {
+public class TimestampResponse implements TSOMessage, Sequencable {
 
    /**
     * the timestamp
@@ -40,10 +40,25 @@ public class TimestampResponse implements TSOMessage {
        return timestamp == -1;
    }
 
-    public static TimestampResponse failedResponse() {
+    public static TimestampResponse failedResponse(long seq) {
         TimestampResponse tr = new TimestampResponse();
         tr.timestamp = -1;//means failed
+        tr.sequence = seq;
         return tr;
+    }
+
+    /**
+     * is this request sequenced and if yes what is the sequence number
+     * -1 means no sequence
+     */
+    public long sequence = -1;
+
+    public long getSequence() {
+        return sequence;
+    }
+
+    public boolean isSequenced() {
+        return sequence != -1;
     }
 
    /**
@@ -55,6 +70,11 @@ public class TimestampResponse implements TSOMessage {
       timestamp = t;
    }
 
+   public TimestampResponse(long t, long seq) {
+      timestamp = t;
+      sequence = seq;
+   }
+
    public TimestampResponse() {
    }
 
@@ -63,23 +83,44 @@ public class TimestampResponse implements TSOMessage {
       return "TimestampResponse: T_s:" + timestamp;
    }
 
+   /**
+    * hack: update this function whenever you change writeObject function
+    */
+   public static int sizeInBytes() {
+       return 17;//byte + long + long
+   }
+
    @Override
    public void writeObject(ChannelBuffer buffer) {
       buffer.writeLong(timestamp);
+      if (isSequenced()) {
+          buffer.writeByte(1);
+          buffer.writeLong(sequence);
+      } else {
+          buffer.writeByte(0);
+      }
+       //NOTE: update sizeInBytes as well
    }
 
    @Override
    public void readObject(ChannelBuffer aInputStream) throws IOException {
       long l = aInputStream.readLong();
-//      aInputStream.readBytes(1100);
       timestamp = l;
-//      System.out.println("Received timestamp " + timestamp);
+      byte s = aInputStream.readByte();
+      if (s == 1) { //isSequenced
+          sequence = aInputStream.readLong();
+      }
    }
 
 //   static byte[] dummy = new byte [1100];
    @Override
    public void writeObject(DataOutputStream aOutputStream) throws IOException {
       aOutputStream.writeLong(timestamp);
-//      aOutputStream.write(dummy);
+      if (isSequenced()) {
+          aOutputStream.writeByte(1);
+          aOutputStream.writeLong(sequence);
+      } else {
+          aOutputStream.writeByte(0);
+      }
    }
 }

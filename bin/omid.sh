@@ -59,6 +59,7 @@ fi
 
 echo running with $NMSG outstanding messages and $NCLIENTS clients
 echo MAX_ROWS = $MAX_ROWS
+    #exec java -Xdebug -Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=y -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient localhost 1234 -zk localhost:2181 1000000 $NMSG $NCLIENTS $MAX_ROWS
     exec java -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient localhost 1234 -zk localhost:2181 1000000 $NMSG $NCLIENTS $MAX_ROWS
 }
 

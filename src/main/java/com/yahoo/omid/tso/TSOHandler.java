@@ -85,8 +85,10 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Bytes monitor
      */
+    public static int globaltxnCnt = 0;
     public static int txnCnt = 0;
     public static int abortCount = 0;
+    public static int globalabortCount = 0;
     public static int outOfOrderCnt = 0;
     public static int hitCount = 0;
     public static long queries = 0;
@@ -196,24 +198,28 @@ public class TSOHandler extends SimpleChannelHandler {
      * Handle the TimestampRequest message
      */
     public void handle(TimestampRequest msg, ChannelHandlerContext ctx) {
-        long timestamp;
+        TimestampResponse response = null;
         synchronized (sharedState) {
             //If the message is sequenced and out of order, reject it
             if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
-                //System.out.println(msg.sequence + " < " + sharedState.lastServicedSequence);
-                timestamp = -1;
+                response = TimestampResponse.failedResponse(msg.getSequence());
                 outOfOrderCnt++;
             }
             else {
                 if (msg.isSequenced())
                     sharedState.lastServicedSequence = msg.sequence;
                 try {
+                    long timestamp;
                     synchronized (sharedState.toWAL) {
                         timestamp = timestampOracle.next(sharedState.toWAL);
                     }
                     //if we do not want to keep track of the commit, simply set it finished
                     if (!msg.trackProgress)
                         sharedState.uncommited.finished(timestamp);
+                    if (msg.isSequenced())
+                        response = new TimestampResponse(timestamp, msg.getSequence());
+                    else
+                        response = new TimestampResponse(timestamp);
                 } catch (IOException e) {
                     e.printStackTrace();
                     return;
@@ -251,7 +257,7 @@ public class TSOHandler extends SimpleChannelHandler {
             }
         }
         synchronized (sharedMsgBufLock) {
-            sharedState.sharedMessageBuffer.writeTimestamp(timestamp);
+            sharedState.sharedMessageBuffer.writeTimestamp(response);
             buffer.flush();
             sharedState.sharedMessageBuffer.rollBackTimestamp();
         }
@@ -324,6 +330,17 @@ public class TSOHandler extends SimpleChannelHandler {
             lockOp = wasFailed ? LockOp.unlock : LockOp.disownIt;//if it was failed, it was not owened by us
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
+        if (reply.committed) {
+            if (msg.prepared)
+                globaltxnCnt++;
+            else
+                txnCnt++;
+        } else {
+            if (msg.prepared)
+                globalabortCount++;
+            else
+                abortCount++;
+        }
         sendResponse(ctx, reply);
     }
 
@@ -462,7 +479,6 @@ public class TSOHandler extends SimpleChannelHandler {
 
     private void doAbort(CommitRequest msg, CommitResponse reply)
         throws IOException {
-        abortCount++;
         synchronized (sharedState.toWAL) {
             sharedState.toWAL.writeByte(LoggerProtocol.ABORT);
             sharedState.toWAL.writeLong(msg.startTimestamp);
@@ -535,7 +551,6 @@ public class TSOHandler extends SimpleChannelHandler {
     private void sendResponse(ChannelHandlerContext ctx, CommitResponse reply) {
         ChannelandMessage cam = new ChannelandMessage(ctx, reply);
         synchronized (sharedState) {
-            txnCnt++;
             sharedState.nextBatch.add(cam);
             if (sharedState.baos.size() >= TSOState.BATCH_SIZE)
                 flushTheBatch();

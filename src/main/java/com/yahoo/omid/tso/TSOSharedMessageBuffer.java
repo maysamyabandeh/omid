@@ -20,6 +20,8 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Iterator;
 
+import com.yahoo.omid.tso.messages.TimestampResponse;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.jboss.netty.buffer.ChannelBuffer;
@@ -160,11 +162,11 @@ public class TSOSharedMessageBuffer {
    private ChannelBuffer tBuffer;
    private boolean wrap = false;
    
-   public void writeTimestamp(long timestamp) {
+   public void writeTimestamp(TimestampResponse tr) {
        wrap = true;
-       tBuffer = ChannelBuffers.buffer(9);
+       tBuffer = ChannelBuffers.buffer(1 + TimestampResponse.sizeInBytes());
        tBuffer.writeByte(TSOMessage.TimestampResponse);
-       tBuffer.writeLong(timestamp);
+       tr.writeObject(tBuffer);
    }
    
    public void rollBackTimestamp() {

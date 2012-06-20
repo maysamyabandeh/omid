@@ -69,7 +69,7 @@ public class SimClient {
     /**
      * Maximum number of modified rows in each transaction
      */
-    static int MAX_ROW = 20;
+    static int GLOBAL_MAX_ROW = 20;
 
     /**
      * How much wait between connect and launching the traffic
@@ -183,18 +183,14 @@ public class SimClient {
         @Override
         public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
             super.channelConnected(ctx, e);
-            try {
-                //wait for other clients to connect
-                Thread.sleep(WAIT_AFTER_CONNECT);
-            } catch (InterruptedException e1) {
-                //ignore
-            }
             startDate = new Date();
-            long seed = System.currentTimeMillis();
-            seed *= e.getChannel().getId();// to make it channel dependent
-            rnd = new java.util.Random(seed);
-            //Starts the traffic
-            launchBenchmark();
+            synchronized(SimClient.this) {
+                if (rnd == null) {
+                    long seed = System.currentTimeMillis();
+                    seed *= e.getChannel().getId();// to make it channel dependent
+                    rnd = new java.util.Random(seed);
+                }
+            }
         }
 
         /**
@@ -202,6 +198,10 @@ public class SimClient {
          */
         @Override
         protected void launchBenchmark() {
+            launchGlobalBenchmark();
+        }
+
+        private void launchGlobalBenchmark() {
             for (int i = 0; i < MAX_IN_FLIGHT; i++) {
                 executor.execute(new Runnable() {
                     @Override
@@ -231,8 +231,14 @@ while (curMessage > 0) {
             throw new TransactionException("Error retrieving timestamp", null);
         //2.5 run the transation
         ReadWriteRows[] rw = new ReadWriteRows[tsoClients.length];
-        for (int i = 0; i < tsoClients.length; i++)
-            rw[i] = tsoClients[i].simulateATransaction(tscbs[i].getPong().timestamp);
+        int remainedSize = GLOBAL_MAX_ROW;
+        for (int i = 0; i < tsoClients.length; i++) {
+            float fshare = remainedSize / (float)(tsoClients.length - i);
+            int share = (int)Math.ceil(fshare);//use ceil to avoid 0 share
+            remainedSize -= share;
+            rw[i] = tsoClients[i].simulateATransaction(tscbs[i].getPong().timestamp,
+                    share);
+        }
         //3. send prepares
         PingPongCallback<PrepareResponse>[] prcbs;
         prcbs = new PingPongCallback[tsoClients.length];
@@ -317,7 +323,14 @@ while (curMessage > 0) {
             } catch (InterruptedException e1) {
                 //ignore
             }
-            //launchBenchmark();
+            synchronized(SimClient.this) {
+                if (rnd == null) {
+                    long seed = System.currentTimeMillis();
+                    seed *= e.getChannel().getId();// to make it channel dependent
+                    rnd = new java.util.Random(seed);
+                }
+            }
+            launchBenchmark();
         }
 
         /**
@@ -377,7 +390,7 @@ while (curMessage > 0) {
          */
         private void sendCommitRequest(final long timestamp, final PingPongCallback<CommitResponse> tccb) {
             RowKey [] writtenRows, readRows;
-            ReadWriteRows rw = simulateATransaction(timestamp);
+            ReadWriteRows rw = simulateATransaction(timestamp, GLOBAL_MAX_ROW);
             CommitRequest crmsg = new CommitRequest(timestamp, rw.writtenRows, rw.readRows);
             sendCommitRequest(crmsg, tccb);
         }
@@ -388,7 +401,7 @@ while (curMessage > 0) {
          * @param timestamp
          * @param channel
          */
-         ReadWriteRows simulateATransaction(long timestamp) {
+         ReadWriteRows simulateATransaction(long timestamp, int MAX_ROW) {
             // initialize rnd if it is not yet
             assert(rnd != null);
 
@@ -444,10 +457,14 @@ while (curMessage > 0) {
             }
         }
 
+        protected void launchBenchmark() {
+            launchLocalBenchmark();
+        }
+
         /**
          * Launch the benchmark
          */
-        protected void launchBenchmark() {
+        private void launchLocalBenchmark() {
             for (int i = 0; i < MAX_IN_FLIGHT; i++) {
                 executor.execute(new Runnable() {
                     @Override
@@ -458,6 +475,8 @@ while (curMessage > 0) {
                             try {
                                 getNewTimestamp(tscb);
                                 tscb.await();
+                                if (tscb.getException() != null)
+                                    throw tscb.getException();
                                 TimestampResponse pong = tscb.getPong();
                                 PingPongCallback<CommitResponse> tccb = new PingPongCallback<CommitResponse>();
                                 sendCommitRequest( pong.timestamp, tccb );
@@ -467,6 +486,9 @@ while (curMessage > 0) {
                                 e.printStackTrace();
                             } catch (IOException e) {
                                 LOG.error("Couldn't start transaction", e);
+                            } catch (Exception e) {
+                                LOG.error("Unexpected Exception", e);
+                                e.printStackTrace();
                             }
                         }
                     }
@@ -576,7 +598,7 @@ while (curMessage > 0) {
         }
 
         if (args.length > nextParam) {
-            MAX_ROW = Integer.parseInt(args[nextParam]);
+            GLOBAL_MAX_ROW = Integer.parseInt(args[nextParam]);
             nextParam++;
         }
 
@@ -635,7 +657,7 @@ while (curMessage > 0) {
 
         List<SimClient> handlers = new ArrayList<SimClient>();
 
-        System.out.println("PARAM MAX_ROW: " + MAX_ROW);
+        System.out.println("PARAM GLOBAL_MAX_ROW: " + GLOBAL_MAX_ROW);
         System.out.println("PARAM DB_SIZE: " + DB_SIZE);
         System.out.println("PARAM MAX_IN_FLIGHT: " + MAX_IN_FLIGHT);
         System.out.println("pause " + pauseClient);

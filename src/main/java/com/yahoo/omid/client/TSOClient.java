@@ -83,6 +83,7 @@ public class TSOClient extends SimpleChannelHandler {
     };
 
     private Queue<PingPongCallback<TimestampResponse>> createCallbacks;
+    private Map<Long, PingPongCallback<TimestampResponse>> sequencedTimestampCallbacks;
     private Map<Long, PingPongCallback<CommitResponse>> commitCallbacks;
     private Map<Long, PingPongCallback<PrepareResponse>> prepareCallbacks;
     private Map<Long, List<PingPongCallback<CommitQueryResponse>>> isCommittedCallbacks;
@@ -168,6 +169,7 @@ public class TSOClient extends SimpleChannelHandler {
         prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<PrepareResponse>>());
         isCommittedCallbacks = Collections.synchronizedMap(new HashMap<Long, List<PingPongCallback<CommitQueryResponse>>>());
         createCallbacks = new ConcurrentLinkedQueue<PingPongCallback<TimestampResponse>>();
+        sequencedTimestampCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<TimestampResponse>>());
         channel = null;
 
         System.out.println("Starting TSOClient");
@@ -253,12 +255,31 @@ public class TSOClient extends SimpleChannelHandler {
         getNewTimestamp(tr, cb);
     }
 
+    /**
+     * Ask for a timestamp with a sequenced message
+     * The response must be associated with the sequence in the request
+     */
     public void getNewTimestamp(long sequence, PingPongCallback<TimestampResponse> cb) throws IOException {
         TimestampRequest tr = new TimestampRequest();
         tr.sequence = sequence;
-        getNewTimestamp(tr, cb);
+        synchronized(sequencedTimestampCallbacks) {
+            sequencedTimestampCallbacks.put(sequence, cb);
+        }
+        withConnection(new SyncMessageOp<TimestampRequest>(tr, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(sequencedTimestampCallbacks) {
+                    sequencedTimestampCallbacks.remove(msg.getSequence());
+                }
+                cb.error(e);
+            }
+        });
     }
 
+    /**
+     * Ask for a timestamp without a sequence
+     * The response could be used for any previous timestamp requests
+     */
     public void getNewTimestamp(TimestampRequest tr, PingPongCallback<TimestampResponse> cb) throws IOException {
         synchronized(createCallbacks) {
             createCallbacks.add(cb);
@@ -491,14 +512,22 @@ public class TSOClient extends SimpleChannelHandler {
             }
             cb.complete(r);
         } else if (msg instanceof TimestampResponse) {
-            PingPongCallback<TimestampResponse> cb = createCallbacks.poll();
-            long timestamp = ((TimestampResponse)msg).timestamp;
-            if (!hasConnectionTimestamp || timestamp < connectionTimestamp) {
+            TimestampResponse tr = (TimestampResponse)msg;
+            PingPongCallback<TimestampResponse> cb;
+            if (tr.isSequenced())
+                synchronized (sequencedTimestampCallbacks) {
+                    cb = sequencedTimestampCallbacks.remove(tr.getSequence());
+                }
+            else
+                synchronized (createCallbacks) {
+                    cb = createCallbacks.poll();
+                }
+            if (!hasConnectionTimestamp || tr.timestamp < connectionTimestamp) {
                 hasConnectionTimestamp = true;
-                connectionTimestamp = timestamp;
+                connectionTimestamp = tr.timestamp;
             }
             if (cb == null) {
-                LOG.error("Receiving a timestamp response, but none requested: " + timestamp);
+                LOG.error("Receiving a timestamp response, but none requested: " + tr.timestamp);
                 return;
             }
             if (((TimestampResponse)msg).isFailed()) {
@@ -611,6 +640,12 @@ public class TSOClient extends SimpleChannelHandler {
                 cb.error(e);
             }
             createCallbacks.clear();
+        }
+        synchronized (sequencedTimestampCallbacks) {
+            for (PingPongCallback<TimestampResponse> cb : sequencedTimestampCallbacks.values()) {
+                cb.error(e);
+            }
+            sequencedTimestampCallbacks.clear();
         }
 
         synchronized(commitCallbacks) {
