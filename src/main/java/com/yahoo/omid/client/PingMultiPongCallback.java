@@ -16,44 +16,34 @@
 
 package com.yahoo.omid.client;
 
-
+import com.yahoo.omid.tso.TSOMessage;
 import java.util.concurrent.CountDownLatch;
 
-public class PingCallback implements Callback {
-   protected Exception e = null;
-   protected CountDownLatch latch;
+public class PingMultiPongCallback<PONG extends TSOMessage> extends PingCallback {
+    PONG[] pongs;
+    int receivedPongs = 0;
 
-   public PingCallback() {
-       latch = new CountDownLatch(1);;
-   }
+    PingMultiPongCallback(int pongsCnt) {
+        //pongs = new PONG[pongsCnt];
+        pongs = (PONG[]) new TSOMessage[pongsCnt];
+        latch = new CountDownLatch(pongsCnt);
+    }
 
-   public boolean isComplete() {
-       return latch.getCount() == 0;
-   }
+    public PONG[] getPongs() {
+        return pongs;
+    }
 
-   public Exception getException() {
-      return e;
-   }
+    synchronized public void complete(PONG pong) {
+        pongs[receivedPongs] = pong;
+        receivedPongs++;
+        complete();
+    }
 
-   synchronized
-   public void error(Exception e) {
-      this.e = e;
-      countDown();
-   }
-
-    synchronized
-        public void complete() {
+    synchronized public void error(Exception e) {
+        this.e = e;
+        while (latch.getCount() > 0)
             countDown();
-        }
+    }
 
-   protected void countDown() {
-      latch.countDown();
-   }
-   
-   public void await() throws InterruptedException {
-      latch.await();
-   }
-
-   public static final PingCallback DUMMY = new PingCallback();
 }
 

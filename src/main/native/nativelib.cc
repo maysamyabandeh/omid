@@ -39,6 +39,8 @@ long totalwalkforput = 0;
 long totalget = 0;
 long totalput = 0;
 long gmaxCommits = 0;
+//long totalOwned = 0;
+//long totalDisowned = 0;
 /**
  * The total number of entries in the hash table.
  */
@@ -246,6 +248,10 @@ JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_unlock__I
 JNIEXPORT jlong JNICALL Java_com_yahoo_omid_tso_CommitHashMap_unlock__IZ
 (JNIEnv * env , jobject jobj, jint index, jboolean keepItOwned) {
    table[index].owned = keepItOwned == JNI_TRUE ? !FREE : FREE;
+   //if (keepItOwned == JNI_TRUE) 
+       //totalOwned++;
+   //else
+       //totalDisowned++;
    int rc = pthread_mutex_unlock(&table[index].mutex);
    return 0;
 }

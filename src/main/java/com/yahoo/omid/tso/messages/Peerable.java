@@ -14,10 +14,17 @@
  * limitations under the License. See accompanying LICENSE file.
  */
 
-package com.yahoo.omid.client;
+package com.yahoo.omid.tso.messages;
 
-public interface Callback {
-   public void error(Exception e);
-   public void complete();
-   public boolean isComplete();
+/**
+ * The message object for sending a timestamp request to TSO
+ * @author maysam
+ *
+ */
+public interface Peerable {
+    public boolean peerIsSpecified();
+    public int getPeerId();
 }
+
+
+

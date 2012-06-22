@@ -30,6 +30,7 @@ import org.jboss.netty.handler.codec.frame.FrameDecoder;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.TSOSharedMessageBuffer;
 import com.yahoo.omid.tso.messages.AbortRequest;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
@@ -42,6 +43,7 @@ import com.yahoo.omid.tso.messages.FullAbortReport;
 import com.yahoo.omid.tso.messages.FailedElderReport;
 import com.yahoo.omid.tso.messages.EldestUpdate;
 import com.yahoo.omid.tso.messages.ReincarnationReport;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
@@ -108,6 +110,9 @@ public class TSODecoder extends FrameDecoder {
                         break;
                     case TSOMessage.EldestUpdate:
                         msg = new EldestUpdate();
+                        break;
+                    case TSOMessage.PeerIdAnnoncement:
+                        msg = new PeerIdAnnoncement();
                         break;
                     case TSOMessage.ReincarnationReport:
                         msg = new ReincarnationReport();

@@ -54,6 +54,7 @@ import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.Elder;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.messages.AbortRequest;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
@@ -72,6 +73,7 @@ import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.serialization.TSODecoder;
 import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.Statistics;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class TSOClient extends SimpleChannelHandler {
     private static final Log LOG = LogFactory.getLog(TSOClient.class);
@@ -83,7 +85,7 @@ public class TSOClient extends SimpleChannelHandler {
     };
 
     private Queue<PingPongCallback<TimestampResponse>> createCallbacks;
-    private Map<Long, PingPongCallback<TimestampResponse>> sequencedTimestampCallbacks;
+    private Map<Long, PingMultiPongCallback<TimestampResponse>> sequencedTimestampCallbacks;
     private Map<Long, PingPongCallback<CommitResponse>> commitCallbacks;
     private Map<Long, PingPongCallback<PrepareResponse>> prepareCallbacks;
     private Map<Long, List<PingPongCallback<CommitQueryResponse>>> isCommittedCallbacks;
@@ -106,6 +108,7 @@ public class TSOClient extends SimpleChannelHandler {
     private int retries;
     private int retry_delay_ms;
     private Timer retryTimer;
+    private AtomicLong sequenceGenerator = new AtomicLong();
 
     private enum State {
         DISCONNECTED, CONNECTING, CONNECTED, RETRY_CONNECT_WAIT
@@ -160,7 +163,17 @@ public class TSOClient extends SimpleChannelHandler {
         return eldest;
     }
 
+    /**
+     * The id that uniquely identifies the TSOClient accross all the TSOClients
+     */
+    final int myId;
+
     public TSOClient(Properties conf) throws IOException {
+        this(conf,0);
+    }
+
+    public TSOClient(Properties conf, int id) throws IOException {
+        myId = id;
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
         retryTimer = new Timer(true);
@@ -169,7 +182,7 @@ public class TSOClient extends SimpleChannelHandler {
         prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<PrepareResponse>>());
         isCommittedCallbacks = Collections.synchronizedMap(new HashMap<Long, List<PingPongCallback<CommitQueryResponse>>>());
         createCallbacks = new ConcurrentLinkedQueue<PingPongCallback<TimestampResponse>>();
-        sequencedTimestampCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<TimestampResponse>>());
+        sequencedTimestampCallbacks = Collections.synchronizedMap(new HashMap<Long, PingMultiPongCallback<TimestampResponse>>());
         channel = null;
 
         System.out.println("Starting TSOClient");
@@ -205,6 +218,7 @@ public class TSOClient extends SimpleChannelHandler {
 
         addr = new InetSocketAddress(host, port);
         connectIfNeeded();
+        introducePeerId();
     }
 
     private State connectIfNeeded() throws IOException {
@@ -256,14 +270,16 @@ public class TSOClient extends SimpleChannelHandler {
     }
 
     /**
-     * Ask for a timestamp with a sequenced message
-     * The response must be associated with the sequence in the request
+     * Ask for a timestamp through a middle node
+     * Use client id to specify the peer and a sequence to specify the request
      */
-    public void getNewTimestamp(long sequence, PingPongCallback<TimestampResponse> cb) throws IOException {
+    public PingMultiPongCallback<TimestampResponse> getNewVectorTimestamp(int responseCnt) throws IOException {
+        PingMultiPongCallback<TimestampResponse> cb = new PingMultiPongCallback(responseCnt);
         TimestampRequest tr = new TimestampRequest();
-        tr.sequence = sequence;
+        tr.peerId = myId;
+        tr.sequence = sequenceGenerator.getAndIncrement();
         synchronized(sequencedTimestampCallbacks) {
-            sequencedTimestampCallbacks.put(sequence, cb);
+            sequencedTimestampCallbacks.put(tr.sequence, cb);
         }
         withConnection(new SyncMessageOp<TimestampRequest>(tr, cb) {
             @Override
@@ -274,6 +290,7 @@ public class TSOClient extends SimpleChannelHandler {
                 cb.error(e);
             }
         });
+        return cb;
     }
 
     /**
@@ -293,6 +310,22 @@ public class TSOClient extends SimpleChannelHandler {
                 cb.error(e);
             }
         });
+    }
+
+    /**
+     * Forward a new timestamp request
+     * do not wait for the respond
+     */
+    public void forwardTimestampRequest(TimestampRequest tr) throws IOException {
+        withConnection(new MessageOp<TimestampRequest>(tr));
+    }
+
+    /**
+     * Send the id to the peer of the connection
+     */
+    public void introducePeerId() throws IOException {
+        PeerIdAnnoncement msg = new PeerIdAnnoncement(myId);
+        withConnection(new MessageOp<PeerIdAnnoncement>(msg));
     }
 
     public void isCommitted(long startTimestamp, long pendingWriteTimestamp, PingPongCallback<CommitQueryResponse> cb)
@@ -513,29 +546,34 @@ public class TSOClient extends SimpleChannelHandler {
             cb.complete(r);
         } else if (msg instanceof TimestampResponse) {
             TimestampResponse tr = (TimestampResponse)msg;
-            PingPongCallback<TimestampResponse> cb;
-            if (tr.isSequenced())
-                synchronized (sequencedTimestampCallbacks) {
-                    cb = sequencedTimestampCallbacks.remove(tr.getSequence());
-                }
-            else
-                synchronized (createCallbacks) {
-                    cb = createCallbacks.poll();
-                }
             if (!hasConnectionTimestamp || tr.timestamp < connectionTimestamp) {
                 hasConnectionTimestamp = true;
                 connectionTimestamp = tr.timestamp;
             }
-            if (cb == null) {
-                LOG.error("Receiving a timestamp response, but none requested: " + tr.timestamp);
-                return;
+            if (tr.isSequenced()) {
+                synchronized (sequencedTimestampCallbacks) {
+                    //do not remove it rightaway, it might need more pongs
+                    PingMultiPongCallback<TimestampResponse> cb;
+                    cb = sequencedTimestampCallbacks.get(tr.getSequence());
+                    if (cb == null) {
+                        LOG.error("Receiving a timestamp response, but none requested: " + tr.timestamp);
+                        return;
+                    }
+                    cb.complete((TimestampResponse)msg);
+                    if (cb.isComplete())
+                        sequencedTimestampCallbacks.remove(tr.getSequence());
+                }
+            } else {
+                synchronized (createCallbacks) {
+                    PingPongCallback<TimestampResponse> cb;
+                    cb = createCallbacks.poll();
+                    if (cb == null) {
+                        LOG.error("Receiving a timestamp response, but none requested: " + tr.timestamp);
+                        return;
+                    }
+                    cb.complete((TimestampResponse)msg);
+                }
             }
-            if (((TimestampResponse)msg).isFailed()) {
-                //System.out.println("failed");
-                cb.error(new Exception("out of order sequence"));
-            }
-            else
-                cb.complete((TimestampResponse)msg);
         } else if (msg instanceof CommitQueryResponse) {
             CommitQueryResponse r = (CommitQueryResponse)msg;
             if (r.commitTimestamp != 0) {
@@ -642,7 +680,7 @@ public class TSOClient extends SimpleChannelHandler {
             createCallbacks.clear();
         }
         synchronized (sequencedTimestampCallbacks) {
-            for (PingPongCallback<TimestampResponse> cb : sequencedTimestampCallbacks.values()) {
+            for (PingMultiPongCallback<TimestampResponse> cb : sequencedTimestampCallbacks.values()) {
                 cb.error(e);
             }
             sequencedTimestampCallbacks.clear();

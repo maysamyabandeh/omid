@@ -16,7 +16,10 @@
 
 package com.yahoo.omid;
 
+import org.apache.zookeeper.ZooKeeper;
 import org.apache.hadoop.conf.Configuration;
+import java.util.Properties;
+import java.util.List;
 
 /**
  * To retrieve configuration of omid
@@ -24,10 +27,71 @@ import org.apache.hadoop.conf.Configuration;
  *
  */
 public class OmidConfiguration extends Configuration {
-    public static Configuration create() {
-        Configuration conf = new Configuration();
+    Properties[] soConfs = null;
+    Properties sequencerConf = null;
+
+    public static OmidConfiguration create() {
+        OmidConfiguration conf = new OmidConfiguration();
         conf.addDefaultResource("omid-site.xml");
         return conf;
+    }
+    
+    public Properties[] getStatusOracleConfs() {
+        assert(soConfs != null);
+        return soConfs;
+    }
+
+    public Properties getSequencerConf() {
+        assert(sequencerConf != null);
+        return sequencerConf;
+    }
+
+    /**
+     * Load from zk the configuration for connecting to SOs and the sequencer
+     */
+    public void loadServerConfs(String zkServers) {
+        //zookeeper
+        String sequencerIP = null;
+        String sequencerPort;
+        byte[] tmp;
+        assert(zkServers != null);
+        try{
+            ZooKeeper zk = new ZooKeeper(zkServers, 
+                    Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
+                    null);
+            tmp = zk.getData("/sequencer/ip", false, null);
+            sequencerIP = new String(tmp);
+            tmp = zk.getData("/sequencer/port", false, null);
+            sequencerPort = new String(tmp);
+            System.out.println(sequencerIP + " " + sequencerPort);
+            sequencerConf = new Properties();
+            sequencerConf.setProperty("tso.host", sequencerIP);
+            sequencerConf.setProperty("tso.port", sequencerPort);
+            sequencerConf.setProperty("tso.executor.threads", "10");
+
+            List<String> sos = zk.getChildren("/sos", false);
+            System.out.println(sos);
+            assert(sos.size() > 0);
+            soConfs = new Properties[sos.size()];
+            String host, port;
+            for (int i = 0; i < sos.size(); i++) {
+                String soId = sos.get(i);
+                tmp = zk.getData("/sos/" + soId + "/ip", false, null);
+                host = new String(tmp);
+                tmp = zk.getData("/sos/" + soId + "/port", false, null);
+                port = new String(tmp);
+                System.out.println(host + " " + port);
+
+                soConfs[i] = new Properties();
+                soConfs[i].setProperty("tso.host", host);
+                soConfs[i].setProperty("tso.port", port);
+                soConfs[i].setProperty("tso.executor.threads", "10");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+
     }
 }
 

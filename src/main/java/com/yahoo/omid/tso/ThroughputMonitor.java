@@ -55,6 +55,8 @@ public class ThroughputMonitor extends Thread {
          long oldHitCount = TSOHandler.hitCount;
          long startTime = System.currentTimeMillis();
          //            long oldWaitTime = TSOHandler.waitTime; 
+         //long oldtotalowned = CommitHashMap.gettotalowned(); 
+         //long oldtotaldisowned = CommitHashMap.gettotaldisowned(); 
          long oldtotalput = CommitHashMap.gettotalput(); 
          long oldtotalget = CommitHashMap.gettotalget(); 
          long oldtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
@@ -92,7 +94,8 @@ public class ThroughputMonitor extends Thread {
             long newGlobalAbortCount = TSOHandler.globalabortCount;
             long newOutOfOrderCnt = TSOHandler.outOfOrderCnt;
             long newHitCount = TSOHandler.hitCount;
-            //                long newWaitTime = TSOHandler.waitTime; 
+            //long newtotalowned = CommitHashMap.gettotalput(); 
+            //long newtotaldisowned = CommitHashMap.gettotalget(); 
             long newtotalput = CommitHashMap.gettotalput(); 
             long newtotalget = CommitHashMap.gettotalget(); 
             long newtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
@@ -134,6 +137,7 @@ public class ThroughputMonitor extends Thread {
                     + "Queries: %d CurrentBuffers: %d ExtraGets: %d AskedTSO: %d Tot fflushes: %d"
                     + "Avg commit: %2.4f Avg flush: %5.2f "
                     + "Avg write: %5.2f Tot writes: %d Rec Bytes/s: %5.2fMBs Sent Bytes/s: %5.2fMBs %d ",
+                    //+ "Owned %d Disowned %d ",
                     (newCounter - oldCounter) / (float)(endTime - startTime) * 1000,
                     (newGlobalCounter - oldGlobalCounter) / (float)(endTime - startTime) * 1000,
                     (newAbortCount - oldAbortCount) / (float)(endTime - startTime) * 1000,
@@ -154,6 +158,7 @@ public class ThroughputMonitor extends Thread {
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesReceivedPerSecond() / (double) (1024 * 1024) : 0,
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesSentPerSecond() / (double) (1024 * 1024) : 0,
                     state.largestDeletedTimestamp
+                    //newtotalowned, newtotaldisowned
                     )
               );
             
@@ -166,6 +171,8 @@ public class ThroughputMonitor extends Thread {
             startTime = endTime;
             //                oldWaitTime = newWaitTime;
             oldtotalget = newtotalget;
+            //oldtotalowned = newtotalowned;
+            //oldtotaldisowned = newtotaldisowned;
             oldtotalput = newtotalput;
             oldtotalwalkforget = newtotalwalkforget;
             oldtotalwalkforput = newtotalwalkforput;

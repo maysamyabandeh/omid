@@ -49,6 +49,7 @@ import org.jboss.netty.channel.group.DefaultChannelGroup;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.AbortRequest;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
@@ -100,6 +101,7 @@ public class TSOHandler extends SimpleChannelHandler {
     private static ChannelGroup clientChannels = new DefaultChannelGroup("clients");
 
     private Map<Channel, ReadingBuffer> messageBuffersMap = new HashMap<Channel, ReadingBuffer>();
+    private Map<Integer, Channel> peerToChannelMap = new HashMap<Integer, Channel>();
 
     /**
      * Timestamp Oracle
@@ -163,6 +165,9 @@ public class TSOHandler extends SimpleChannelHandler {
         } else if (msg instanceof FullAbortReport) {
             handle((FullAbortReport) msg, ctx);
             return;
+        } else if (msg instanceof PeerIdAnnoncement) {
+            handle((PeerIdAnnoncement) msg, ctx);
+            return;
         } else if (msg instanceof ReincarnationReport) {
             handle((ReincarnationReport) msg, ctx);
             return;
@@ -195,9 +200,40 @@ public class TSOHandler extends SimpleChannelHandler {
     }
 
     /**
+     * Handle the PeerIdAnnoncement message
+     */
+    public void handle(PeerIdAnnoncement msg, ChannelHandlerContext ctx) {
+        Channel channel;
+        int peerId = msg.getPeerId();
+        channel = peerToChannelMap.get(peerId);
+        if (channel != null)
+            LOG.error("Reseting the channel for peer " + peerId);
+        System.out.println("set channel for " + peerId);
+        channel = ctx.getChannel();
+        peerToChannelMap.put(peerId, channel);
+    }
+
+    /**
      * Handle the TimestampRequest message
      */
     public void handle(TimestampRequest msg, ChannelHandlerContext ctx) {
+        Channel channel;
+        //see if the peer of the communication is not the sender
+        if (msg.peerIsSpecified()) {
+            channel = peerToChannelMap.get(msg.getPeerId());
+            if (channel == null) {
+                //TODO: handle it properly
+                LOG.error("Unkonwn peer " + msg.getPeerId());
+                LOG.error(peerToChannelMap);
+                return;
+            }
+        } else {//else the destination is the sender
+            channel = ctx.getChannel();
+        }
+        handle(msg, channel);
+    }
+
+    public void handle(TimestampRequest msg, Channel channel) {
         TimestampResponse response = null;
         synchronized (sharedState) {
             //If the message is sequenced and out of order, reject it
@@ -229,11 +265,10 @@ public class TSOHandler extends SimpleChannelHandler {
 
         ReadingBuffer buffer;
         synchronized (messageBuffersMap) {
-            buffer = messageBuffersMap.get(ctx.getChannel());
+            buffer = messageBuffersMap.get(channel);
             if (buffer == null) {
                 synchronized (sharedState) {
                     synchronized (sharedMsgBufLock) {
-                        Channel channel = ctx.getChannel();
                         channel.write(new CommittedTransactionReport(sharedState.latestStartTimestamp, sharedState.latestCommitTimestamp));
                         synchronized (sharedState.hashmap) {
                             for (Long halfAborted : sharedState.hashmap.halfAborted) {
@@ -299,12 +334,14 @@ public class TSOHandler extends SimpleChannelHandler {
                 sharedState.lastServicedSequence = msg.sequence;
         }
         //If the message is sequenced and out of order, reject it
+        /* TODO: This is a bug in design
         if (outOfOrder) {
             CommitResponse reply = CommitResponse.failedResponse(msg.startTimestamp);
             outOfOrderCnt++;
             sendResponse(ctx, reply);
             return;
         }
+        */
         CommitResponse reply = new CommitResponse(msg.startTimestamp);
         sortRows(msg.readRows, msg.writtenRows);
         if (msg.prepared)

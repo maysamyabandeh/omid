@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import com.yahoo.omid.OmidConfiguration;
 import org.apache.hadoop.conf.Configuration;
 
+import org.jboss.netty.channel.ChannelHandler;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.jboss.netty.bootstrap.ServerBootstrap;
@@ -52,6 +53,7 @@ public class TSOServer implements Runnable {
     private TSOServerConfig config;
     private boolean finish;
     private Object lock;
+    protected ChannelGroup channelGroup = new DefaultChannelGroup(TSOServer.class.getName());
 
     public TSOServer() {
         super();
@@ -87,6 +89,10 @@ public class TSOServer implements Runnable {
         new TSOServer(config).run();
     }
 
+    protected ChannelHandler newMessageHandler() {
+        return new TSOHandler(channelGroup, state);
+    }
+
     @Override
     public void run() {
         Configuration conf = OmidConfiguration.create();
@@ -100,7 +106,7 @@ public class TSOServer implements Runnable {
 
         ServerBootstrap bootstrap = new ServerBootstrap(factory);
         // Create the global ChannelGroup
-        ChannelGroup channelGroup = new DefaultChannelGroup(TSOServer.class.getName());
+        channelGroup = new DefaultChannelGroup(TSOServer.class.getName());
         // threads max
         //int maxThreads = Runtime.getRuntime().availableProcessors() *2 + 1;
         //More concurrency gives lower performance due to synchronizations
@@ -108,8 +114,7 @@ public class TSOServer implements Runnable {
         System.out.println("maxThreads: " + maxThreads);
         //int maxThreads = 5;
         // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
-        //ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
-        ThreadPoolExecutor pipelineExecutor = new DelayedOrderedExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
+        ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
 
         // This is the only object of timestamp oracle
         // TODO: make it singleton
@@ -127,7 +132,8 @@ public class TSOServer implements Runnable {
         System.out.println("PARAM LOAD_FACTOR: " + TSOState.LOAD_FACTOR);
         System.out.println("PARAM MAX_THREADS: " + maxThreads);
 
-        final TSOHandler handler = new TSOHandler(channelGroup, state);
+        //final TSOHandler handler = new TSOHandler(channelGroup, state);
+        final ChannelHandler handler = newMessageHandler();
 
         bootstrap.setPipelineFactory(new TSOPipelineFactory(pipelineExecutor, handler));
         bootstrap.setOption("tcpNoDelay", false);
@@ -183,7 +189,7 @@ public class TSOServer implements Runnable {
         }
 
         //timestampOracle.stop();
-        handler.stop();
+        stopHandler(handler);//handler.stop();
         comHandler.stop();
         state.stop();
 
@@ -207,5 +213,9 @@ public class TSOServer implements Runnable {
 
     public void stop() {
         finish = true;
+    }
+
+    protected void stopHandler(ChannelHandler handler) {
+        ((TSOHandler)handler).stop();
     }
 }

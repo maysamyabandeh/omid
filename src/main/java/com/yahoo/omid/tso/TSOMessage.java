@@ -58,6 +58,7 @@ public interface TSOMessage {
    final public byte EldestUpdate = (byte) 0xce;
    final public byte PrepareCommit = (byte) 0xcf;
    final public byte PrepareResponse =(byte) 0xd0;
+   final public byte PeerIdAnnoncement =(byte) 0xd1;
 
    /*
     * Deserialize function

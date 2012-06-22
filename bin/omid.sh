@@ -38,6 +38,11 @@ else
 	READLINK=readlink
 fi
 
+sequencer() {
+    export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
+    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.SequencerServer -port 4321 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181
+}
+
 tso() {
     export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
     exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TSOServer -port 1234 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181
@@ -77,7 +82,7 @@ initzk() {
     echo Registers the sequencer in the ZooKeeper
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer b ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/ip localhost ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 1234 ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 4321 ;
     echo Registers the SOs in the ZooKeeper
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos b ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0 b ;
@@ -116,6 +121,8 @@ COMMAND=$1
 
 if [ "$COMMAND" = "tso" ]; then
     tso;
+elif [ "$COMMAND" = "sequencer" ]; then
+    sequencer;
 elif [ "$COMMAND" = "tsobench" ]; then
   shift
     tsobench $*;

@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class TimestampRequest implements TSOMessage, Sequencable {
+public class TimestampRequest implements TSOMessage, Sequencable, Peerable {
     /**
      * should we track the progress of the timestamp that is assigned to this txn.
      * or it is just a sequence request
@@ -49,6 +49,20 @@ public class TimestampRequest implements TSOMessage, Sequencable {
         return sequence != -1;
     }
 
+    /**
+     * what is the peer id
+     * -1 means no peer
+     */
+    public int peerId = -1;
+
+    public int getPeerId() {
+        return peerId;
+    }
+
+    public boolean peerIsSpecified() {
+        return peerId != -1;
+    }
+
 	@Override
    public void writeObject(DataOutputStream aOutputStream) 
       throws IOException {
@@ -56,6 +70,12 @@ public class TimestampRequest implements TSOMessage, Sequencable {
       if (isSequenced()) {
           aOutputStream.writeByte(1);
           aOutputStream.writeLong(sequence);
+      } else {
+          aOutputStream.writeByte(0);
+      }
+      if (peerIsSpecified()) {
+          aOutputStream.writeByte(1);
+          aOutputStream.writeInt(peerId);
       } else {
           aOutputStream.writeByte(0);
       }
@@ -69,6 +89,10 @@ public class TimestampRequest implements TSOMessage, Sequencable {
        if (s == 1) { //isSequenced
            sequence = aInputStream.readLong();
        }
+       byte p = aInputStream.readByte();
+       if (p == 1) { //peerIsSpecified
+           peerId = aInputStream.readInt();
+       }
 	}
 
 	   @Override
@@ -77,6 +101,12 @@ public class TimestampRequest implements TSOMessage, Sequencable {
           if (isSequenced()) {
               buffer.writeByte(1);
               buffer.writeLong(sequence);
+          } else {
+              buffer.writeByte(0);
+          }
+          if (peerIsSpecified()) {
+              buffer.writeByte(1);
+              buffer.writeInt(peerId);
           } else {
               buffer.writeByte(0);
           }

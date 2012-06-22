@@ -19,6 +19,7 @@ package com.yahoo.omid.client;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.net.InetAddress;
 
 import org.jboss.netty.channel.ChannelFactory;
 import org.jboss.netty.channel.group.ChannelGroup;
@@ -35,6 +36,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import com.yahoo.omid.IsolationLevel;
+import com.yahoo.omid.OmidConfiguration;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.messages.CommitResponse;
@@ -45,6 +47,7 @@ import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import org.jboss.netty.channel.Channel;
 import java.io.IOException;
+import java.net.UnknownHostException;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.ExceptionEvent;
@@ -162,19 +165,37 @@ public class SimClient {
     public SimClient(Properties[] soConfs, Properties sequencerConf) throws IOException {
         try {
             latch = new CountDownLatch(1 + soConfs.length);
-            sequencerClient = new SimSequencerClient(sequencerConf);
+            int id = generateUniqueId(soConfs.length);
+            sequencerClient = new SimSequencerClient(sequencerConf, id);
             tsoClients = new SimTSOClient[soConfs.length];
             for (int i = 0; i < soConfs.length; i++) {
-                tsoClients[i] = new SimTSOClient(soConfs[i]);
+                id = generateUniqueId(i);
+                tsoClients[i] = new SimTSOClient(soConfs[i], id);
             }
         } catch (IOException e) {
             latch = new CountDownLatch(0);
         }
     }
 
+    int generateUniqueId(int i) {
+        int id = 0;
+        try {
+            InetAddress thisIp = InetAddress.getLocalHost();
+            id = thisIp.hashCode();
+            id = id * (i+1);//avoid i = 0
+            LOG.warn("Generate Id: " + id);
+            return id;
+        } catch (UnknownHostException e) {
+            LOG.error("Error in generating the unique id" + e);
+            e.printStackTrace();
+            System.exit(1);
+        }
+        return id;
+    }
+
     class SimSequencerClient extends SimTSOClient {
-        public SimSequencerClient(Properties conf) throws IOException {
-            super(conf);
+        public SimSequencerClient(Properties conf, int id) throws IOException {
+            super(conf, id);
         }
 
         /**
@@ -198,9 +219,41 @@ public class SimClient {
          */
         @Override
         protected void launchBenchmark() {
-            launchGlobalBenchmark();
+            //launchGlobalBenchmark();
+            launchGlobalTest();
         }
 
+        private void launchGlobalTest() {
+            for (int i = 0; i < MAX_IN_FLIGHT; i++) {
+                executor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+while (curMessage > 0) {
+    curMessage--;
+    try {
+        //1. get a sequence
+        PingMultiPongCallback<TimestampResponse> tscb = 
+                    getNewVectorTimestamp(tsoClients.length);
+        tscb.await();
+        System.out.print("+");
+        //long sequence = tscb.getPong().timestamp;
+    //} catch (TransactionException e) {
+        //System.out.print("-");
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    } catch (IOException e) {
+        LOG.error("Couldn't start transaction", e);
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.exit(1);
+    }
+}
+                    }
+                });
+            }
+        }
+
+/*
         private void launchGlobalBenchmark() {
             for (int i = 0; i < MAX_IN_FLIGHT; i++) {
                 executor.execute(new Runnable() {
@@ -276,20 +329,24 @@ while (curMessage > 0) {
             if (crcbs[i].getException() != null)
                 failed = true;
         }
-        if (failed)
-            throw new TransactionException("Error retrieving timestamp", null);
+        //if (failed)
+            //throw new TransactionException("Error retrieving timestamp", null);
     } catch (TransactionException e) {
         //System.out.print("-");
     } catch (InterruptedException e) {
         e.printStackTrace();
     } catch (IOException e) {
         LOG.error("Couldn't start transaction", e);
+    } catch (Exception e) {
+        e.printStackTrace();
+        System.exit(1);
     }
 }
                     }
                 });
             }
         }
+*/
     }
 
     class SimTSOClient extends TSOClient {
@@ -306,8 +363,8 @@ while (curMessage > 0) {
         public long totalTx = 0;
         private long totalSimulatedTxns = 0;
 
-        public SimTSOClient(Properties conf) throws IOException {
-            super(conf);
+        public SimTSOClient(Properties conf, int id) throws IOException {
+            super(conf, id);
             this.curMessage = nbMessage;
         }
 
@@ -458,7 +515,7 @@ while (curMessage > 0) {
         }
 
         protected void launchBenchmark() {
-            launchLocalBenchmark();
+            //launchLocalBenchmark();
         }
 
         /**
@@ -612,49 +669,6 @@ while (curMessage > 0) {
             nextParam++;
         }
 
-        //zookeeper
-        Properties[] soConfs = null;
-        Properties sequencerConf = null;
-        String sequencerIP = null;
-        String sequencerPort;
-        byte[] tmp;
-        assert(zkServers != null);
-        try{
-            ZooKeeper zk = new ZooKeeper(zkServers, 
-                    Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
-                    null);
-            tmp = zk.getData("/sequencer/ip", false, null);
-            sequencerIP = new String(tmp);
-            tmp = zk.getData("/sequencer/port", false, null);
-            sequencerPort = new String(tmp);
-            System.out.println(sequencerIP + " " + sequencerPort);
-            sequencerConf = new Properties();
-            sequencerConf.setProperty("tso.host", sequencerIP);
-            sequencerConf.setProperty("tso.port", sequencerPort);
-            sequencerConf.setProperty("tso.executor.threads", "10");
-
-            List<String> sos = zk.getChildren("/sos", false);
-            System.out.println(sos);
-            assert(sos.size() > 0);
-            soConfs = new Properties[sos.size()];
-            for (int i = 0; i < sos.size(); i++) {
-                String soId = sos.get(i);
-                tmp = zk.getData("/sos/" + soId + "/ip", false, null);
-                host = new String(tmp);
-                tmp = zk.getData("/sos/" + soId + "/port", false, null);
-                port = new String(tmp);
-                System.out.println(host + " " + port);
-
-                soConfs[i] = new Properties();
-                soConfs[i].setProperty("tso.host", host);
-                soConfs[i].setProperty("tso.port", port);
-                soConfs[i].setProperty("tso.executor.threads", "10");
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
-        }
-
         List<SimClient> handlers = new ArrayList<SimClient>();
 
         System.out.println("PARAM GLOBAL_MAX_ROW: " + GLOBAL_MAX_ROW);
@@ -665,9 +679,11 @@ while (curMessage > 0) {
 
         executor = Executors.newScheduledThreadPool((runs+1)*MAX_IN_FLIGHT);
 
+        OmidConfiguration conf = OmidConfiguration.create();
+        conf.loadServerConfs(zkServers);
         for(int i = 0; i < runs; ++i) {
             // Create the associated Handler
-            SimClient handler = new SimClient(soConfs, sequencerConf);
+            SimClient handler = new SimClient(conf.getStatusOracleConfs(), conf.getSequencerConf());
             handlers.add(handler);
             if ((i - 1) % 20 == 0) Thread.sleep(1000);
         }

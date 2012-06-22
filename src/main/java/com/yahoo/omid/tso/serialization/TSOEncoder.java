@@ -27,6 +27,7 @@ import org.jboss.netty.handler.codec.oneone.OneToOneEncoder;
 
 import com.yahoo.omid.tso.BufferPool;
 import com.yahoo.omid.tso.TSOMessage;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortRequest;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
@@ -73,6 +74,8 @@ public class TSOEncoder extends OneToOneEncoder{
             objWrapper.writeByte(TSOMessage.EldestUpdate);
         } else if (msg instanceof ReincarnationReport) {
             objWrapper.writeByte(TSOMessage.ReincarnationReport);
+        } else if (msg instanceof PeerIdAnnoncement) {
+            objWrapper.writeByte(TSOMessage.PeerIdAnnoncement);
         } else if (msg instanceof CommitQueryRequest) {
             objWrapper.writeByte(TSOMessage.CommitQueryRequest);
         } else if (msg instanceof CommitQueryResponse) {
