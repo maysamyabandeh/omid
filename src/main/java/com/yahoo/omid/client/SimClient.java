@@ -162,16 +162,14 @@ public class SimClient {
     /**
      * Constructor
      */
-    public SimClient(Properties[] soConfs, Properties sequencerConf) throws IOException {
+    public SimClient(Properties[] soConfs, Properties sequencerConf, int index) throws IOException {
         try {
             latch = new CountDownLatch(1 + soConfs.length);
-            int id = generateUniqueId(soConfs.length);
+            int id = generateUniqueId(index);
             sequencerClient = new SimSequencerClient(sequencerConf, id);
             tsoClients = new SimTSOClient[soConfs.length];
-            for (int i = 0; i < soConfs.length; i++) {
-                id = generateUniqueId(i);
+            for (int i = 0; i < soConfs.length; i++)
                 tsoClients[i] = new SimTSOClient(soConfs[i], id);
-            }
         } catch (IOException e) {
             latch = new CountDownLatch(0);
         }
@@ -232,13 +230,24 @@ while (curMessage > 0) {
     curMessage--;
     try {
         //1. get a sequence
-        PingMultiPongCallback<TimestampResponse> tscb = 
-                    getNewVectorTimestamp(tsoClients.length);
-        tscb.await();
+        PingPongCallback<TimestampResponse>[] tscbs;
+        tscbs = new PingPongCallback[tsoClients.length];
+        long sequence = sequenceGenerator.getAndIncrement();
+        for (int i = 0; i < tsoClients.length; i++)
+            tscbs[i] = tsoClients[i].registerTimestampCallback(sequence);
+        getNewIndirectTimestamp(sequence);
+        boolean failed = false;
+        for (int i = 0; i < tsoClients.length; i++) {
+            tscbs[i].await();
+            if (tscbs[i].getException() != null)
+                failed = true;
+        }
+        if (failed)
+            throw new TransactionException("Error retrieving timestamp", null);
         System.out.print("+");
         //long sequence = tscb.getPong().timestamp;
-    //} catch (TransactionException e) {
-        //System.out.print("-");
+    } catch (TransactionException e) {
+        System.out.print("-");
     } catch (InterruptedException e) {
         e.printStackTrace();
     } catch (IOException e) {
@@ -683,7 +692,7 @@ while (curMessage > 0) {
         conf.loadServerConfs(zkServers);
         for(int i = 0; i < runs; ++i) {
             // Create the associated Handler
-            SimClient handler = new SimClient(conf.getStatusOracleConfs(), conf.getSequencerConf());
+            SimClient handler = new SimClient(conf.getStatusOracleConfs(), conf.getSequencerConf(), i);
             handlers.add(handler);
             if ((i - 1) % 20 == 0) Thread.sleep(1000);
         }

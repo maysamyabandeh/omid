@@ -48,6 +48,7 @@ import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
+import com.yahoo.omid.tso.messages.Peerable;
 import com.yahoo.omid.tso.messages.AbortRequest;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
@@ -156,31 +157,36 @@ public class TSOHandler extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
+        Channel channel = null;
+        if (msg instanceof Peerable)
+            channel = getPeerChannel((Peerable)msg);//could be null
+        if (channel == null)//then the response is sent to the sender
+            channel = ctx.getChannel();
         if (msg instanceof TimestampRequest) {
-            handle((TimestampRequest) msg, ctx);
+            handle((TimestampRequest) msg, channel);
             return;
         } else if (msg instanceof CommitRequest) {
-            handle((CommitRequest) msg, ctx);
+            handle((CommitRequest) msg, channel);
             return;
         } else if (msg instanceof FullAbortReport) {
-            handle((FullAbortReport) msg, ctx);
+            handle((FullAbortReport) msg, channel);
             return;
         } else if (msg instanceof PeerIdAnnoncement) {
-            handle((PeerIdAnnoncement) msg, ctx);
+            handle((PeerIdAnnoncement) msg, channel);
             return;
         } else if (msg instanceof ReincarnationReport) {
-            handle((ReincarnationReport) msg, ctx);
+            handle((ReincarnationReport) msg, channel);
             return;
         } else if (msg instanceof CommitQueryRequest) {
-            handle((CommitQueryRequest) msg, ctx);
+            handle((CommitQueryRequest) msg, channel);
             return;
         } else if (msg instanceof PrepareCommit) {
-            handle((PrepareCommit) msg, ctx);
+            handle((PrepareCommit) msg, channel);
             return;
         }
     }
 
-    public void handle(AbortRequest msg, ChannelHandlerContext ctx) {
+    public void handle(AbortRequest msg, Channel channel) {
         synchronized (sharedState) {
             DataOutputStream toWAL  = sharedState.toWAL;
             try {
@@ -202,22 +208,20 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the PeerIdAnnoncement message
      */
-    public void handle(PeerIdAnnoncement msg, ChannelHandlerContext ctx) {
-        Channel channel;
+    public void handle(PeerIdAnnoncement msg, Channel channel) {
         int peerId = msg.getPeerId();
-        channel = peerToChannelMap.get(peerId);
-        if (channel != null)
+        Channel currChannel = peerToChannelMap.get(peerId);
+        if (currChannel != null)
             LOG.error("Reseting the channel for peer " + peerId);
         System.out.println("set channel for " + peerId);
-        channel = ctx.getChannel();
         peerToChannelMap.put(peerId, channel);
     }
 
     /**
      * Handle the TimestampRequest message
      */
-    public void handle(TimestampRequest msg, ChannelHandlerContext ctx) {
-        Channel channel;
+    public Channel getPeerChannel(Peerable msg) {
+        Channel channel = null;
         //see if the peer of the communication is not the sender
         if (msg.peerIsSpecified()) {
             channel = peerToChannelMap.get(msg.getPeerId());
@@ -225,12 +229,9 @@ public class TSOHandler extends SimpleChannelHandler {
                 //TODO: handle it properly
                 LOG.error("Unkonwn peer " + msg.getPeerId());
                 LOG.error(peerToChannelMap);
-                return;
             }
-        } else {//else the destination is the sender
-            channel = ctx.getChannel();
         }
-        handle(msg, channel);
+        return channel;
     }
 
     public void handle(TimestampRequest msg, Channel channel) {
@@ -305,7 +306,7 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the PrepareCommit message
      */
-    private void handle(PrepareCommit msg, ChannelHandlerContext ctx) {
+    private void handle(PrepareCommit msg, Channel channel) {
         PrepareResponse reply = new PrepareResponse(msg.startTimestamp);
         sortRows(msg.readRows, msg.writtenRows);
         reply.committed = prepareCommit(msg.startTimestamp, msg.readRows, msg.writtenRows);
@@ -315,13 +316,13 @@ public class TSOHandler extends SimpleChannelHandler {
             lockOp = LockOp.unlock;//do not change the current owner if there is any
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
-        ctx.getChannel().write(reply);
+        channel.write(reply);
     }
 
     /**
      * Handle the CommitRequest message
      */
-    private void handle(CommitRequest msg, ChannelHandlerContext ctx) {
+    private void handle(CommitRequest msg, Channel channel) {
         //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
         synchronized (sharedState) {
             sharedState.uncommited.finished(msg.startTimestamp);
@@ -378,7 +379,7 @@ public class TSOHandler extends SimpleChannelHandler {
             else
                 abortCount++;
         }
-        sendResponse(ctx, reply);
+        sendResponse(channel, reply);
     }
 
     /**
@@ -585,8 +586,8 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * send the response to the client
      */
-    private void sendResponse(ChannelHandlerContext ctx, CommitResponse reply) {
-        ChannelandMessage cam = new ChannelandMessage(ctx, reply);
+    private void sendResponse(Channel channel, CommitResponse reply) {
+        ChannelandMessage cam = new ChannelandMessage(channel, reply);
         synchronized (sharedState) {
             sharedState.nextBatch.add(cam);
             if (sharedState.baos.size() >= TSOState.BATCH_SIZE)
@@ -666,7 +667,7 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the CommitQueryRequest message
      */
-    public void handle(CommitQueryRequest msg, ChannelHandlerContext ctx) {
+    public void handle(CommitQueryRequest msg, Channel channel) {
         CommitQueryResponse reply = new CommitQueryResponse(msg.startTimestamp);
         reply.queryTimestamp = msg.queryTimestamp;
         synchronized (sharedState) {
@@ -687,7 +688,7 @@ public class TSOHandler extends SimpleChannelHandler {
             //1. Tc < Tmax
             //2. Ts < Tmax && aborted && Cleanedup is sent after we read the value but is received before this query is processed.
 
-            ctx.getChannel().write(reply);
+            channel.write(reply);
             // We send the message directly. If after a failure the state is inconsistent we'll detect it
         }
     }
@@ -699,15 +700,15 @@ public class TSOHandler extends SimpleChannelHandler {
             }
             sharedState.addRecord(sharedState.baos.toByteArray(), new AddRecordCallback() {
                 @Override
-                public void addRecordComplete(int rc, Object ctx) {
+                public void addRecordComplete(int rc, Object obj) {
                     if (rc != Code.OK) {
                         LOG.warn("Write failed: " + LoggerException.getMessage(rc));
                     } else {
                         synchronized (callbackLock) {
                             @SuppressWarnings("unchecked")
-                            ArrayList<ChannelandMessage> theBatch = (ArrayList<ChannelandMessage>) ctx;
+                            ArrayList<ChannelandMessage> theBatch = (ArrayList<ChannelandMessage>) obj;
             for (ChannelandMessage cam : theBatch) {
-                Channels.write(cam.ctx, Channels.succeededFuture(cam.ctx.getChannel()), cam.msg);
+                cam.channel.write(cam.msg);
             }
                         }
                     }
@@ -774,7 +775,7 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the ReincarnationReport message
      */
-    public void handle(ReincarnationReport msg, ChannelHandlerContext ctx) {
+    public void handle(ReincarnationReport msg, Channel channel) {
         synchronized (sharedState) {
             LOG.warn("reincarnated: " + msg.startTimestamp);
             boolean itWasFailed = sharedState.elders.reincarnateElder(msg.startTimestamp);
@@ -807,7 +808,7 @@ public class TSOHandler extends SimpleChannelHandler {
     /**
      * Handle the FullAbortReport message
      */
-    public void handle(FullAbortReport msg, ChannelHandlerContext ctx) {
+    public void handle(FullAbortReport msg, Channel chennel) {
         synchronized (sharedState) {
             DataOutputStream toWAL  = sharedState.toWAL;
             try {
@@ -829,10 +830,10 @@ public class TSOHandler extends SimpleChannelHandler {
      * Wrapper for Channel and Message
      */
     public static class ChannelandMessage {
-        ChannelHandlerContext ctx;
+        Channel channel;
         TSOMessage msg;
-        ChannelandMessage(ChannelHandlerContext c, TSOMessage m) {
-            ctx = c;
+        ChannelandMessage(Channel c, TSOMessage m) {
+            channel = c;
             msg = m;
         }
     }

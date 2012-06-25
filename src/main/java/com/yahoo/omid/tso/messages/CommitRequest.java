@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class CommitRequest implements TSOMessage, Sequencable {
+public class CommitRequest implements TSOMessage, Sequencable, Peerable {
 
     /**
      * Starting timestamp
@@ -48,6 +48,20 @@ public class CommitRequest implements TSOMessage, Sequencable {
 
     public boolean isSequenced() {
         return sequence != -1;
+    }
+
+    /**
+     * what is the peer id
+     * -1 means no peer
+     */
+    public int peerId = -1;
+
+    public int getPeerId() {
+        return peerId;
+    }
+
+    public boolean peerIsSpecified() {
+        return peerId != -1;
     }
 
     /**
@@ -116,6 +130,10 @@ public class CommitRequest implements TSOMessage, Sequencable {
         if (s == 1) { //isSequenced
             sequence = aInputStream.readLong();
         }
+        byte p = aInputStream.readByte();
+        if (p == 1) { //peerIsSpecified
+            peerId = aInputStream.readInt();
+        }
     }
 
     @Override
@@ -138,6 +156,12 @@ public class CommitRequest implements TSOMessage, Sequencable {
         if (isSequenced()) {
             aOutputStream.writeByte(1);
             aOutputStream.writeLong(sequence);
+        } else {
+            aOutputStream.writeByte(0);
+        }
+        if (peerIsSpecified()) {
+            aOutputStream.writeByte(1);
+            aOutputStream.writeInt(peerId);
         } else {
             aOutputStream.writeByte(0);
         }

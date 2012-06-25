@@ -48,22 +48,7 @@ import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
-import com.yahoo.omid.tso.messages.AbortRequest;
-import com.yahoo.omid.tso.messages.AbortedTransactionReport;
-import com.yahoo.omid.tso.messages.CommitQueryRequest;
-import com.yahoo.omid.tso.messages.CommitQueryResponse;
-import com.yahoo.omid.tso.messages.CommitRequest;
-import com.yahoo.omid.tso.messages.CommitResponse;
-import com.yahoo.omid.tso.messages.CommittedTransactionReport;
-import com.yahoo.omid.tso.messages.FullAbortReport;
-import com.yahoo.omid.tso.messages.EldestUpdate;
-import com.yahoo.omid.tso.messages.ReincarnationReport;
-import com.yahoo.omid.tso.messages.FailedElderReport;
-import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
-import com.yahoo.omid.tso.messages.TimestampRequest;
-import com.yahoo.omid.tso.messages.TimestampResponse;
-import com.yahoo.omid.tso.messages.PrepareCommit;
-import com.yahoo.omid.tso.messages.PrepareResponse;
+import com.yahoo.omid.tso.messages.Peerable;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
@@ -125,28 +110,21 @@ public class SequencerHandler extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
-        if (msg instanceof TimestampRequest) {
-            handle((TimestampRequest) msg, ctx);
-            return;
-        } else if (msg instanceof CommitRequest) {
-            handle((CommitRequest) msg, ctx);
-            return;
-        }
-        System.out.printf("unexpected message: " + e);
-        System.exit(1);
+        if (msg instanceof Peerable && msg instanceof TSOMessage)
+            multicast((TSOMessage)msg, ctx);
     }
 
     /**
-     * Handle the TimestampRequest message
+     * Handle a received message
      * It has to be synchnronized to ensure atmoic broadcast
      */
-    public void handle(TimestampRequest msg, ChannelHandlerContext ctx) {
+    public void multicast(TSOMessage msg, ChannelHandlerContext ctx) {
         try {
-        synchronized (tsoClients) {
-            for (TSOClient tsoClient: tsoClients) {
-                tsoClient.forwardTimestampRequest(msg);
+            synchronized (tsoClients) {
+                for (TSOClient tsoClient: tsoClients) {
+                    tsoClient.forward(msg);
+                }
             }
-        }
         } catch (IOException e) {
             e.printStackTrace();
             //TODO: send nack back to client
@@ -154,13 +132,6 @@ public class SequencerHandler extends SimpleChannelHandler {
     }
 
     private boolean finish;
-
-    /**
-     * Handle the CommitRequest message
-     */
-    private void handle(CommitRequest msg, ChannelHandlerContext ctx) {
-        //multicast commmit
-    }
 
     /*
      * Wrapper for Channel and Message
