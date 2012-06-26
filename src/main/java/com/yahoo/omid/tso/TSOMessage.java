@@ -59,6 +59,7 @@ public interface TSOMessage {
    final public byte PrepareCommit = (byte) 0xcf;
    final public byte PrepareResponse =(byte) 0xd0;
    final public byte PeerIdAnnoncement =(byte) 0xd1;
+   final public byte MultiCommitRequest =(byte) 0xd2;
 
    /*
     * Deserialize function

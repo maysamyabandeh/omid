@@ -36,17 +36,6 @@ public class TimestampResponse implements TSOMessage, Sequencable {
     */
    public long timestamp;
 
-   public boolean isFailed() {
-       return timestamp == -1;
-   }
-
-    public static TimestampResponse failedResponse(long seq) {
-        TimestampResponse tr = new TimestampResponse();
-        tr.timestamp = -1;//means failed
-        tr.sequence = seq;
-        return tr;
-    }
-
     /**
      * is this request sequenced and if yes what is the sequence number
      * -1 means no sequence

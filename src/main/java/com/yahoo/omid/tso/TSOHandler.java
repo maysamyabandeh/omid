@@ -21,6 +21,8 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.Iterator;
@@ -55,6 +57,7 @@ import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.CommittedTransactionReport;
 import com.yahoo.omid.tso.messages.FullAbortReport;
@@ -103,6 +106,14 @@ public class TSOHandler extends SimpleChannelHandler {
 
     private Map<Channel, ReadingBuffer> messageBuffersMap = new HashMap<Channel, ReadingBuffer>();
     private Map<Integer, Channel> peerToChannelMap = new HashMap<Integer, Channel>();
+
+    /**
+     * Mainatains a mapping between the transaction and its PrepareCommit
+     * which contains the rows read and written by the transaction
+     */
+    //TODO: create N maps and attach them to channels. This avoids concurrency inefficiency
+    private ConcurrentMap<Long, PrepareCommit> txnHistory = new ConcurrentHashMap(10000);
+    //TODO: estimate a proper capacity
 
     /**
      * Timestamp Oracle
@@ -165,7 +176,7 @@ public class TSOHandler extends SimpleChannelHandler {
         if (msg instanceof TimestampRequest) {
             handle((TimestampRequest) msg, channel);
             return;
-        } else if (msg instanceof CommitRequest) {
+        } else if (msg instanceof CommitRequest) {//it also handles MultiCommitRequest
             handle((CommitRequest) msg, channel);
             return;
         } else if (msg instanceof FullAbortReport) {
@@ -237,30 +248,21 @@ public class TSOHandler extends SimpleChannelHandler {
     public void handle(TimestampRequest msg, Channel channel) {
         TimestampResponse response = null;
         synchronized (sharedState) {
-            //If the message is sequenced and out of order, reject it
-            if (msg.isSequenced() && msg.sequence < sharedState.lastServicedSequence) {
-                response = TimestampResponse.failedResponse(msg.getSequence());
-                outOfOrderCnt++;
-            }
-            else {
-                if (msg.isSequenced())
-                    sharedState.lastServicedSequence = msg.sequence;
-                try {
-                    long timestamp;
-                    synchronized (sharedState.toWAL) {
-                        timestamp = timestampOracle.next(sharedState.toWAL);
-                    }
-                    //if we do not want to keep track of the commit, simply set it finished
-                    if (!msg.trackProgress)
-                        sharedState.uncommited.finished(timestamp);
-                    if (msg.isSequenced())
-                        response = new TimestampResponse(timestamp, msg.getSequence());
-                    else
-                        response = new TimestampResponse(timestamp);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    return;
+            try {
+                long timestamp;
+                synchronized (sharedState.toWAL) {
+                    timestamp = timestampOracle.next(sharedState.toWAL);
                 }
+                //if we do not want to keep track of the commit, simply set it finished
+                if (!msg.trackProgress)
+                    sharedState.uncommited.finished(timestamp);
+                if (msg.isSequenced())
+                    response = new TimestampResponse(timestamp, msg.getSequence());
+                else
+                    response = new TimestampResponse(timestamp);
+            } catch (IOException e) {
+                e.printStackTrace();
+                return;
             }
         }
 
@@ -316,6 +318,9 @@ public class TSOHandler extends SimpleChannelHandler {
             lockOp = LockOp.unlock;//do not change the current owner if there is any
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
+        PrepareCommit prevValue = txnHistory.put(msg.startTimestamp, msg);
+        //System.out.println("txnHistory.put " + msg.startTimestamp + " " + prevValue);
+        assert(prevValue == null);
         channel.write(reply);
     }
 
@@ -323,38 +328,34 @@ public class TSOHandler extends SimpleChannelHandler {
      * Handle the CommitRequest message
      */
     private void handle(CommitRequest msg, Channel channel) {
+        if (msg instanceof MultiCommitRequest) {
+            //point to the related start timestamp in the vector timestamp
+            ((MultiCommitRequest)msg).setSoId(sharedState.getId());
+        }
         //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
         synchronized (sharedState) {
-            sharedState.uncommited.finished(msg.startTimestamp);
+            sharedState.uncommited.finished(msg.getStartTimestamp());
         }
-        boolean outOfOrder = false;
-        synchronized (sharedState) {
-            outOfOrder = msg.isSequenced() &&
-                msg.sequence < sharedState.lastServicedSequence;
-            if (msg.isSequenced())
-                sharedState.lastServicedSequence = msg.sequence;
-        }
-        //If the message is sequenced and out of order, reject it
-        /* TODO: This is a bug in design
-        if (outOfOrder) {
-            CommitResponse reply = CommitResponse.failedResponse(msg.startTimestamp);
-            outOfOrderCnt++;
-            sendResponse(ctx, reply);
-            return;
-        }
-        */
-        CommitResponse reply = new CommitResponse(msg.startTimestamp);
+        CommitResponse reply = new CommitResponse(msg.getStartTimestamp());
         sortRows(msg.readRows, msg.writtenRows);
-        if (msg.prepared)
+        if (msg.prepared) {
+            //System.out.println("txnHistory.remove " + msg.getStartTimestamp());
+            PrepareCommit prep = txnHistory.remove(msg.getStartTimestamp());
+            assert(prep != null);
+            if (prep == null)
+                LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory);
+            msg.readRows = prep.readRows;
+            msg.writtenRows = prep.writtenRows;
             reply.committed = msg.successfulPrepared;
+        }
         else
-            reply.committed = prepareCommit(msg.startTimestamp, msg.readRows, msg.writtenRows);
+            reply.committed = prepareCommit(msg.getStartTimestamp(), msg.readRows, msg.writtenRows);
         try {
             if (reply.committed) {
                 if (msg.writtenRows.length > 0)
                     doCommit(msg, reply);
                 else
-                    reply.commitTimestamp = msg.startTimestamp;//default: Tc=Ts for read-only
+                    reply.commitTimestamp = msg.getStartTimestamp();//default: Tc=Ts for read-only
             }
             else
                 doAbort(msg, reply);
@@ -364,10 +365,10 @@ public class TSOHandler extends SimpleChannelHandler {
         //release the locks and send the response
         LockOp lockOp = LockOp.unlock;
         if (msg.prepared) {
-            boolean wasFailed = sharedState.failedPrepared.remove(msg.startTimestamp);//just in case it was failed
+            boolean wasFailed = sharedState.failedPrepared.remove(msg.getStartTimestamp());//just in case it was failed
             lockOp = wasFailed ? LockOp.unlock : LockOp.disownIt;//if it was failed, it was not owened by us
         }
-        setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
+        setLocks(msg.readRows, msg.writtenRows, lockOp, msg.getStartTimestamp());
         if (reply.committed) {
             if (msg.prepared)
                 globaltxnCnt++;
@@ -435,7 +436,7 @@ public class TSOHandler extends SimpleChannelHandler {
         long newmax = -1;
         long oldmax = -1;
         //2. commit
-        reply.commitTimestamp = msg.startTimestamp;//default: Tc=Ts for read-only
+        reply.commitTimestamp = msg.getStartTimestamp();//default: Tc=Ts for read-only
 
         Set<Long> toAbort = null;
         //2.5 check the write-write conflicts to detect elders
@@ -449,25 +450,25 @@ public class TSOHandler extends SimpleChannelHandler {
                 reply.commitTimestamp = timestampOracle.next(sharedState.toWAL);
                 //the recovery procedure assumes that write to the WAL and obtaining the commit timestamp is performed atmically
                 sharedState.toWAL.writeByte(LoggerProtocol.COMMIT);
-                sharedState.toWAL.writeLong(msg.startTimestamp);
+                sharedState.toWAL.writeLong(msg.getStartTimestamp());
                 sharedState.toWAL.writeLong(reply.commitTimestamp);//Tc is not necessary in theory, since we abort the in-progress txn after recovery, but it makes it easier for the recovery algorithm to bypass snapshotting
                 if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//ww conflict
                     //TODO: merge it with COMMIT entry
                     sharedState.toWAL.writeByte(LoggerProtocol.ELDER);
-                    sharedState.toWAL.writeLong(msg.startTimestamp);
+                    sharedState.toWAL.writeLong(msg.getStartTimestamp());
                 }
             }
             //b) for the sake of efficiency do this, otherwise raise in Tmax causes perofrmance problems
             sharedState.uncommited.finished(reply.commitTimestamp);
             //c) commit the transaction
             //newmax = sharedState.hashmap.setCommitted(msg.startTimestamp, reply.commitTimestamp, newmax);
-            newmax = sharedState.processCommit(msg.startTimestamp, reply.commitTimestamp, newmax);
+            newmax = sharedState.processCommit(msg.getStartTimestamp(), reply.commitTimestamp, newmax);
             if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {//if it is supposed to be reincarnated, also map Tc to Tc just in case of a future query.
                 newmax = sharedState.hashmap.setCommitted(reply.commitTimestamp, reply.commitTimestamp, newmax);
             }
             //d) report the commit to the immdediate next txn
             synchronized (sharedMsgBufLock) {
-                queueCommit(msg.startTimestamp, reply.commitTimestamp);
+                queueCommit(msg.getStartTimestamp(), reply.commitTimestamp);
             }
             //e) report eldest if it is changed by this commit
             reportEldestIfChanged(reply, msg);
@@ -519,13 +520,13 @@ public class TSOHandler extends SimpleChannelHandler {
         throws IOException {
         synchronized (sharedState.toWAL) {
             sharedState.toWAL.writeByte(LoggerProtocol.ABORT);
-            sharedState.toWAL.writeLong(msg.startTimestamp);
+            sharedState.toWAL.writeLong(msg.getStartTimestamp());
         }
         synchronized (sharedState.hashmap) {
-            sharedState.processAbort(msg.startTimestamp);
+            sharedState.processAbort(msg.getStartTimestamp());
         }
         synchronized (sharedMsgBufLock) {
-            queueHalfAbort(msg.startTimestamp);
+            queueHalfAbort(msg.getStartTimestamp());
         }
     }
 
@@ -624,9 +625,9 @@ public class TSOHandler extends SimpleChannelHandler {
         for (RowKey r: msg.writtenRows) {
             long value;
             value = sharedState.hashmap.get(r.getRow(), r.getTable(), r.hashCode());
-            if (value != 0 && value > msg.startTimestamp) {
+            if (value != 0 && value > msg.getStartTimestamp()) {
                 aWWconflictDetected(reply, msg, r);
-            } else if (value == 0 && sharedState.largestDeletedTimestamp > msg.startTimestamp) {
+            } else if (value == 0 && sharedState.largestDeletedTimestamp > msg.getStartTimestamp()) {
                 //then it could have been committed after start timestamp but deleted by recycling
                 aWWconflictDetected(reply, msg, r);
             }
@@ -638,19 +639,19 @@ public class TSOHandler extends SimpleChannelHandler {
         //2. add it to elders list
         if (reply.rowsWithWriteWriteConflict != null && reply.rowsWithWriteWriteConflict.size() > 0) {
             ArrayList<RowKey> rowsWithWriteWriteConflict = new ArrayList<RowKey>(reply.rowsWithWriteWriteConflict);
-            sharedState.elders.addElder(msg.startTimestamp, reply.commitTimestamp, rowsWithWriteWriteConflict);
+            sharedState.elders.addElder(msg.getStartTimestamp(), reply.commitTimestamp, rowsWithWriteWriteConflict);
             if (sharedState.elders.isEldestChangedSinceLastProbe()) {
-                LOG.warn("eldest is changed: " + msg.startTimestamp);
+                LOG.warn("eldest is changed: " + msg.getStartTimestamp());
                 synchronized (sharedMsgBufLock) {
                     queueEldestUpdate(sharedState.elders.getEldest());
                 }
                 synchronized (sharedState.toWAL) {
                     sharedState.toWAL.writeByte(LoggerProtocol.ELDEST);
-                    sharedState.toWAL.writeLong(msg.startTimestamp);
+                    sharedState.toWAL.writeLong(msg.getStartTimestamp());
                 }
             }
             else
-                LOG.warn("eldest " + sharedState.elders.getEldest() + " isnt changed by ww " + msg.startTimestamp );
+                LOG.warn("eldest " + sharedState.elders.getEldest() + " isnt changed by ww " + msg.getStartTimestamp() );
         }
     }
 

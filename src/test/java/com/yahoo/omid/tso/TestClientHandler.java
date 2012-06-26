@@ -93,7 +93,7 @@ public class TestClientHandler extends TSOClient {
    public void sendMessage(Object msg) throws IOException {
       if (msg instanceof CommitRequest) {
          CommitRequest cr = (CommitRequest) msg;
-         commit(cr.startTimestamp, cr, new PingPongCallback<CommitResponse>());
+         commit(cr.getStartTimestamp(), cr, new PingPongCallback<CommitResponse>());
       } else if (msg instanceof TimestampRequest) {
          getNewTimestamp(new PingPongCallback<TimestampResponse>());
       } else if (msg instanceof CommitQueryRequest) {

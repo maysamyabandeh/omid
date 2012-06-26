@@ -75,7 +75,10 @@ public class OmidConfiguration extends Configuration {
             soConfs = new Properties[sos.size()];
             String host, port;
             for (int i = 0; i < sos.size(); i++) {
-                String soId = sos.get(i);
+                //String soId = sos.get(i);
+                //TODO: the sort order of children is not in ascending order
+                //TODO: here I assume that the children names are numbers from 0 to n-1
+                String soId = String.valueOf(i);
                 tmp = zk.getData("/sos/" + soId + "/ip", false, null);
                 host = new String(tmp);
                 tmp = zk.getData("/sos/" + soId + "/port", false, null);

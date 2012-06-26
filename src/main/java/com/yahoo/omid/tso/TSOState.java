@@ -133,6 +133,14 @@ public class TSOState {
 
    public Set<Long> failedPrepared = Collections.synchronizedSet(new HashSet<Long>(100));
 
+   int id; //the id of the so
+   public int getId() {
+       return id;
+   }
+   public void setId(int id) {
+       this.id = id;
+   }
+
    /**
     * Process commit request.
     * 

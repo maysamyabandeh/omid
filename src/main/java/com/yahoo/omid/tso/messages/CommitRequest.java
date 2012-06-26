@@ -29,25 +29,17 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class CommitRequest implements TSOMessage, Sequencable, Peerable {
+public class CommitRequest implements TSOMessage, Peerable {
 
     /**
      * Starting timestamp
      */
-    public long startTimestamp;
-
-    /**
-     * is this request sequenced and if yes what is the sequence number
-     * -1 means no sequence
-     */
-    public long sequence = -1;
-
-    public long getSequence() {
-        return sequence;
+    private long startTimestamp;
+    public void setStartTimestamp(long ts) {
+        startTimestamp = ts;
     }
-
-    public boolean isSequenced() {
-        return sequence != -1;
+    public long getStartTimestamp() {
+        return startTimestamp;
     }
 
     /**
@@ -126,10 +118,6 @@ public class CommitRequest implements TSOMessage, Sequencable, Peerable {
         for (int i = 0; i < size; i++) {
             readRows[i] = RowKey.readObject(aInputStream);
         }
-        byte s = aInputStream.readByte();
-        if (s == 1) { //isSequenced
-            sequence = aInputStream.readLong();
-        }
         byte p = aInputStream.readByte();
         if (p == 1) { //peerIsSpecified
             peerId = aInputStream.readInt();
@@ -152,12 +140,6 @@ public class CommitRequest implements TSOMessage, Sequencable, Peerable {
         aOutputStream.writeInt(readRows.length);
         for (RowKey r: readRows) {
             r.writeObject(aOutputStream);
-        }
-        if (isSequenced()) {
-            aOutputStream.writeByte(1);
-            aOutputStream.writeLong(sequence);
-        } else {
-            aOutputStream.writeByte(0);
         }
         if (peerIsSpecified()) {
             aOutputStream.writeByte(1);

@@ -43,6 +43,7 @@ import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import org.jboss.netty.channel.Channel;
@@ -217,11 +218,10 @@ public class SimClient {
          */
         @Override
         protected void launchBenchmark() {
-            //launchGlobalBenchmark();
-            launchGlobalTest();
+            launchGlobalBenchmark();
         }
 
-        private void launchGlobalTest() {
+        private void launchGlobalBenchmark() {
             for (int i = 0; i < MAX_IN_FLIGHT; i++) {
                 executor.execute(new Runnable() {
                     @Override
@@ -229,7 +229,7 @@ public class SimClient {
 while (curMessage > 0) {
     curMessage--;
     try {
-        //1. get a sequence
+        //1. get a vector timestamp
         PingPongCallback<TimestampResponse>[] tscbs;
         tscbs = new PingPongCallback[tsoClients.length];
         long sequence = sequenceGenerator.getAndIncrement();
@@ -244,54 +244,7 @@ while (curMessage > 0) {
         }
         if (failed)
             throw new TransactionException("Error retrieving timestamp", null);
-        System.out.print("+");
-        //long sequence = tscb.getPong().timestamp;
-    } catch (TransactionException e) {
-        System.out.print("-");
-    } catch (InterruptedException e) {
-        e.printStackTrace();
-    } catch (IOException e) {
-        LOG.error("Couldn't start transaction", e);
-    } catch (Exception e) {
-        e.printStackTrace();
-        System.exit(1);
-    }
-}
-                    }
-                });
-            }
-        }
-
-/*
-        private void launchGlobalBenchmark() {
-            for (int i = 0; i < MAX_IN_FLIGHT; i++) {
-                executor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-while (curMessage > 0) {
-    curMessage--;
-    PingPongCallback<TimestampResponse> tscb = new PingPongCallback<TimestampResponse>();
-    try {
-        //1. get a sequence
-        getNewTimestamp(false, tscb);
-        tscb.await();
-        long sequence = tscb.getPong().timestamp;
-        //2. start transactions
-        PingPongCallback<TimestampResponse>[] tscbs;
-        tscbs = new PingPongCallback[tsoClients.length];
-        for (int i = 0; i < tsoClients.length; i++) {
-            tscbs[i] = new PingPongCallback<TimestampResponse>();
-            tsoClients[i].getNewTimestamp(sequence, tscbs[i]);
-        }
-        boolean failed = false;
-        for (int i = 0; i < tsoClients.length; i++) {
-            tscbs[i].await();
-            if (tscbs[i].getException() != null)
-                failed = true;
-        }
-        if (failed)
-            throw new TransactionException("Error retrieving timestamp", null);
-        //2.5 run the transation
+        //2. run the transation
         ReadWriteRows[] rw = new ReadWriteRows[tsoClients.length];
         int remainedSize = GLOBAL_MAX_ROW;
         for (int i = 0; i < tsoClients.length; i++) {
@@ -315,33 +268,29 @@ while (curMessage > 0) {
             prcbs[i].await();
             success = success && prcbs[i].getPong().committed;
         }
-        //4. get a sequence
-        tscb = new PingPongCallback<TimestampResponse>();
-        getNewTimestamp(false, tscb);
-        tscb.await();
-        sequence = tscb.getPong().timestamp;
-        //5. commit
-        PingPongCallback<CommitResponse>[] crcbs;
-        crcbs = new PingPongCallback[tsoClients.length];
-        for (int i = 0; i < tsoClients.length; i++) {
-            crcbs[i] = new PingPongCallback<CommitResponse>();
-            long ts = tscbs[i].getPong().timestamp;
-            CommitRequest crmsg = new CommitRequest(ts, rw[i].writtenRows, rw[i].readRows);
-            crmsg.prepared = true;
-            crmsg.sequence = sequence;
-            crmsg.successfulPrepared = success;
-            tsoClients[i].sendCommitRequest(crmsg, crcbs[i]);
-        }
+        //4. get a vector commit timestamp
+        PingPongCallback<CommitResponse>[] tccbs;
+        tccbs = new PingPongCallback[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++)
+            tccbs[i] = tsoClients[i].registerCommitCallback(tscbs[i].getPong().timestamp);
+        long[] vts = new long[tsoClients.length];
+        for (int i = 0; i < tsoClients.length; i++)
+            vts[i] = tscbs[i].getPong().timestamp;
+        MultiCommitRequest mcr = new MultiCommitRequest(vts);
+        mcr.prepared = true;
+        mcr.successfulPrepared = success;
+        getNewIndirectCommitTimestamp(mcr);
         failed = false;
         for (int i = 0; i < tsoClients.length; i++) {
-            crcbs[i].await();
-            if (crcbs[i].getException() != null)
+            tccbs[i].await();
+            if (tscbs[i].getException() != null)
                 failed = true;
         }
-        //if (failed)
-            //throw new TransactionException("Error retrieving timestamp", null);
+        if (failed)
+            throw new TransactionException("Error committing", null);
+        //System.out.print("+");
     } catch (TransactionException e) {
-        //System.out.print("-");
+        System.out.print("-");
     } catch (InterruptedException e) {
         e.printStackTrace();
     } catch (IOException e) {
@@ -355,7 +304,7 @@ while (curMessage > 0) {
                 });
             }
         }
-*/
+
     }
 
     class SimTSOClient extends TSOClient {
@@ -439,9 +388,9 @@ while (curMessage > 0) {
                 //ignore
             }
             // keep statistics
-            wallClockTime.put(msg.startTimestamp, System.nanoTime());
+            wallClockTime.put(msg.getStartTimestamp(), System.nanoTime());
             try {
-                commit(msg.startTimestamp, msg, tccb);
+                commit(msg.getStartTimestamp(), msg, tccb);
             } catch (IOException e) {
                 LOG.error("Couldn't send commit", e);
                 e.printStackTrace();
@@ -524,7 +473,7 @@ while (curMessage > 0) {
         }
 
         protected void launchBenchmark() {
-            //launchLocalBenchmark();
+            launchLocalBenchmark();
         }
 
         /**

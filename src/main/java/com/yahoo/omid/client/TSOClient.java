@@ -59,6 +59,7 @@ import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
 import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.PrepareResponse;
@@ -376,7 +377,7 @@ public class TSOClient extends SimpleChannelHandler {
             @Override
             public void error(Exception e) {
                 synchronized(commitCallbacks) {
-                    commitCallbacks.remove(msg.startTimestamp);
+                    commitCallbacks.remove(msg.getStartTimestamp());
                 }
                 cb.error(e);
             }
@@ -384,33 +385,32 @@ public class TSOClient extends SimpleChannelHandler {
     }
 
     /**
-     * Ask for a commit timestamp through a middle node
-     * Use client id to specify the peer and a sequence to specify the request
+     * Register a callback for future commit response
+     * This is useful for indirect communications, when the reponse is triggered
+     * by an indirect message
      */
-    /*
-    public void getNewVectorCommitTimestamp() throws IOException {
-        msg.peerId = myId;
-        if (msg.writtenRows.length == 0) {
-            msg.readRows = EMPTY_ROWS;
-        }
+    public PingPongCallback<CommitResponse> registerCommitCallback(long transactionId) throws IOException {
+        PingPongCallback<CommitResponse> cb = new PingPongCallback();
         synchronized(commitCallbacks) {
             if (commitCallbacks.containsKey(transactionId)) {
                 throw new IOException("Already committing transaction " + transactionId);
             }
             commitCallbacks.put(transactionId, cb); 
         }
-        withConnection(new SyncMessageOp<CommitRequest>(msg, cb) {
-            @Override
-            public void error(Exception e) {
-                synchronized(commitCallbacks) {
-                    commitCallbacks.remove(msg.startTimestamp);
-                }
-                cb.error(e);
-            }
-        });
         return cb;
     }
-    */
+
+    /**
+     * Ask for a commit timestamp through a middle node
+     * Use client id to specify the peer and a sequence to specify the request
+     */
+    public void getNewIndirectCommitTimestamp(MultiCommitRequest msg) throws IOException {
+        if (msg.writtenRows.length == 0) {
+            msg.readRows = EMPTY_ROWS;
+        }
+        msg.peerId = myId;
+        withConnection(new MessageOp<MultiCommitRequest>(msg));
+    }
 
     public void prepareCommit(long transactionId, PrepareCommit msg, PingPongCallback<PrepareResponse> cb) throws IOException {
         if (msg.writtenRows.length == 0) {

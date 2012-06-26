@@ -47,6 +47,7 @@ import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 
 public class TSODecoder extends FrameDecoder {
     private static final Log LOG = LogFactory.getLog(TSODecoder.class);
@@ -113,6 +114,9 @@ public class TSODecoder extends FrameDecoder {
                         break;
                     case TSOMessage.PeerIdAnnoncement:
                         msg = new PeerIdAnnoncement();
+                        break;
+                    case TSOMessage.MultiCommitRequest:
+                        msg = new MultiCommitRequest();
                         break;
                     case TSOMessage.ReincarnationReport:
                         msg = new ReincarnationReport();

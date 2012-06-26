@@ -40,12 +40,16 @@ fi
 
 sequencer() {
     export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
-    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.SequencerServer -port 4321 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181
+    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.SequencerServer -port 4321 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181 -soId -1
 }
 
 tso() {
+  ID=0;
+  if [ $# -ge 1 ]; then
+    ID=$1
+  fi
     export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
-    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TSOServer -port 1234 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181
+    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TSOServer -port 1234 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181 -soId $ID
 }
 
 tsobench() {
@@ -120,7 +124,8 @@ fi
 COMMAND=$1
 
 if [ "$COMMAND" = "tso" ]; then
-    tso;
+    shift
+    tso $*;
 elif [ "$COMMAND" = "sequencer" ]; then
     sequencer;
 elif [ "$COMMAND" = "tsobench" ]; then
