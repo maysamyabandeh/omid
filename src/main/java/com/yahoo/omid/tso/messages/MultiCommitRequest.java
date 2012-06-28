@@ -93,6 +93,10 @@ public class MultiCommitRequest extends CommitRequest {
 
     @Override
     public void writeObject(ChannelBuffer buffer)  {
+        super.writeObject(buffer);
+        buffer.writeInt(startTimestamps.length);
+        for (int i = 0; i < startTimestamps.length; i++)
+            buffer.writeLong(startTimestamps[i]);
     }
 
     @Override

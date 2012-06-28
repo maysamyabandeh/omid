@@ -21,6 +21,10 @@ import java.util.Deque;
 import java.util.Iterator;
 
 import com.yahoo.omid.tso.messages.TimestampResponse;
+import com.yahoo.omid.tso.messages.TimestampRequest;
+import com.yahoo.omid.tso.messages.CommitRequest;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
+import com.yahoo.omid.client.TSOClient;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -59,17 +63,34 @@ public class TSOSharedMessageBuffer {
    static long _overflows = 0;
    static long _emptyFlushes = 0;
 
+   /**
+    * The consumer of the reading buffer
+    */
+   interface Consumer extends Comparable<Consumer> {
+       public ChannelFuture consume(ChannelBuffer data);
+   }
+
    class ReadingBuffer implements Comparable<ReadingBuffer> {
        private ChannelBuffer readBuffer;
        private int readerIndex = 0;
        private TSOBuffer readingBuffer;
-       private Channel channel;
+       //private Channel channel;
+       private Consumer consumer;
        
-       public ReadingBuffer(Channel channel) {
-           this.channel = channel;
+       void init(Consumer consumer) {
+           //this.channel = channel;
+           this.consumer = consumer;
            this.readingBuffer = currentBuffer.reading(this);
            this.readBuffer = readingBuffer.buffer;
            this.readerIndex = readBuffer.writerIndex();
+       }
+
+       public ReadingBuffer(Channel channel) {
+           init(new ChannelConsumer(channel));
+       }
+
+       public ReadingBuffer(TSOClient tsoClient) {
+           init(new TSOConsumer(tsoClient));
        }
 
        public void flush() {
@@ -87,7 +108,8 @@ public class TSOSharedMessageBuffer {
           if (readable == 0 && readingBuffer != pastBuffer) {
              _emptyFlushes++;
               if (wrap) {
-                 Channels.write(channel, tBuffer);
+                 //Channels.write(channel, tBuffer);
+                 consumer.consume(tBuffer);
               }
               return;
           }
@@ -98,7 +120,9 @@ public class TSOSharedMessageBuffer {
           } else {
               temp = readBuffer.slice(readerIndex, readable);
           }
-          ChannelFuture future = Channels.write(channel, temp);
+          //ChannelFuture future = Channels.write(channel, temp);
+          ChannelFuture future = consumer.consume(temp);
+          //TODO: future could be null since the corresponding channel is not connected
           readerIndex += readable;
           if (readingBuffer == pastBuffer) {
              readingBuffer = currentBuffer.reading(this);
@@ -110,7 +134,8 @@ public class TSOSharedMessageBuffer {
              } else {
                  temp = readBuffer.slice(readerIndex, readable);
              }
-             Channels.write(channel, temp);
+             //Channels.write(channel, temp);
+             consumer.consume(temp);
              readerIndex += readable;
              _flSize += readable;
              if (deleteRef) {
@@ -136,9 +161,72 @@ public class TSOSharedMessageBuffer {
           
        }
        
+       public class ChannelConsumer implements Consumer {
+           Channel channel;
+
+           public ChannelConsumer(Channel channel) {
+               this.channel = channel;
+           }
+
+           public ChannelFuture consume(ChannelBuffer data) {
+               return Channels.write(channel, data);
+           }
+
+           @Override
+           public int compareTo(Consumer c) {
+               if (!(c instanceof ChannelConsumer))
+                   return -1;//TODO: it is ugly
+               ChannelConsumer cc = (ChannelConsumer)c;
+               return this.channel.compareTo(cc.channel);
+           }
+
+           @Override
+           public boolean equals(Object obj) {
+               if (!(obj instanceof ChannelConsumer))
+                   return false;
+               ChannelConsumer cc = (ChannelConsumer)obj;
+               return this.channel.equals(cc.channel);
+           }
+       }
+
+       public class TSOConsumer implements Consumer {
+           TSOClient tsoClient;
+
+           public TSOConsumer(TSOClient tsoClient) {
+               this.tsoClient = tsoClient;
+           }
+
+           public ChannelFuture consume(ChannelBuffer data) {
+               ChannelFuture future = null;
+               try {
+                   future = tsoClient.forward(data);
+               } catch (java.io.IOException e) {
+                   //TODO: do something
+               }
+               return future;
+           }
+
+           @Override
+           public int compareTo(Consumer c) {
+               if (!(c instanceof TSOConsumer))
+                   return 1;//TODO: it is ugly
+               TSOConsumer tc = (TSOConsumer)c;
+               return this.tsoClient.compareTo(tc.tsoClient);
+           }
+
+           @Override
+           public boolean equals(Object obj) {
+               if (!(obj instanceof TSOConsumer))
+                   return false;
+               TSOConsumer tc = (TSOConsumer)obj;
+               return this.tsoClient.equals(tc.tsoClient);
+           }
+       }
+
        @Override
        public int compareTo(ReadingBuffer o) {
-          return this.channel.compareTo(o.channel);
+          //return this.channel.compareTo(o.channel);
+          return this.consumer.compareTo(o.consumer);
        }
        
        @Override
@@ -146,7 +234,8 @@ public class TSOSharedMessageBuffer {
           if (!(obj instanceof ReadingBuffer))
              return false;
           ReadingBuffer buf = (ReadingBuffer) obj;
-          return this.channel.equals(buf.channel);
+          //return this.channel.equals(buf.channel);
+          return this.consumer.equals(buf.consumer);
        }
 
    }
@@ -289,6 +378,54 @@ public class TSOSharedMessageBuffer {
 
       int written = writeBuffer.readableBytes() - readBefore;
       _Avg2 += (written - _Avg2) / _Writes;
+   }
+
+   /**
+    * The estimate of the message size
+    */
+   private int ESTIMATED_WRITE_SIZE = 50;
+   /**
+    * This is used by the sequencer which forwards these two messages
+    */
+   public void writeMessage(TSOMessage msg) {
+       ++_Writes;
+       final int MAX_RETRY = 5;
+       int readBefore = 0;
+       for (int retry = 0; retry < MAX_RETRY; retry++) {//number of retries
+           if (writeBuffer.writableBytes() < ESTIMATED_WRITE_SIZE) {
+               nextBuffer();
+           }
+           writeBuffer.markWriterIndex();
+           readBefore = writeBuffer.readableBytes();
+
+           if (msg instanceof TimestampRequest)
+               writeBuffer.writeByte(TSOMessage.TimestampRequest);
+           else if (msg instanceof MultiCommitRequest)
+               writeBuffer.writeByte(TSOMessage.MultiCommitRequest);
+           //MultiCommitRequest must be before CommitRequest
+           else if (msg instanceof CommitRequest)
+               writeBuffer.writeByte(TSOMessage.CommitRequest);
+           else {
+               LOG.error("Unexpected message: " + msg);
+               return;
+           }
+           try {
+               msg.writeObject(writeBuffer);
+               break;
+           } catch (IndexOutOfBoundsException exp) {
+               writeBuffer.resetWriterIndex();
+               ESTIMATED_WRITE_SIZE *= 2;
+               LOG.error("ESTIMATED_WRITE_SIZE: " + ESTIMATED_WRITE_SIZE);
+               if (retry == MAX_RETRY) {
+                   LOG.error(msg);
+                   exp.printStackTrace();
+                   throw exp;
+               }
+           }
+       }
+
+       int written = writeBuffer.readableBytes() - readBefore;
+       _Avg2 += (written - _Avg2) / _Writes;
    }
 
    public void writeReincarnatedElder(long startTimestamp) {

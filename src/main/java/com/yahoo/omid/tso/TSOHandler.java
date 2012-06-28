@@ -238,7 +238,7 @@ public class TSOHandler extends SimpleChannelHandler {
             channel = peerToChannelMap.get(msg.getPeerId());
             if (channel == null) {
                 //TODO: handle it properly
-                LOG.error("Unkonwn peer " + msg.getPeerId());
+                LOG.error("Unkonwn peer " + msg.getPeerId() + " msg: " + msg);
                 LOG.error(peerToChannelMap);
             }
         }

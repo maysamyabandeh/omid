@@ -193,8 +193,9 @@ public class SimClient {
     }
 
     class SimSequencerClient extends SimTSOClient {
+        static final boolean INTRODUCE = true;
         public SimSequencerClient(Properties conf, int id) throws IOException {
-            super(conf, id);
+            super(conf, id, INTRODUCE==false);
         }
 
         /**
@@ -321,8 +322,12 @@ while (curMessage > 0) {
         public long totalTx = 0;
         private long totalSimulatedTxns = 0;
 
+        static final boolean INTRODUCE = true;
         public SimTSOClient(Properties conf, int id) throws IOException {
-            super(conf, id);
+            this(conf, id, INTRODUCE==true);
+        }
+        public SimTSOClient(Properties conf, int id, boolean introduceYourself) throws IOException {
+            super(conf, id, introduceYourself);
             this.curMessage = nbMessage;
         }
 

@@ -66,6 +66,15 @@ public class RowKey implements Comparable<RowKey> {
         return rk;
     }
 
+    public void writeObject(ChannelBuffer buffer)  {
+        hashCode();
+        buffer.writeInt(hash);
+        buffer.writeByte(rowId.length);
+        buffer.writeBytes(rowId);
+        buffer.writeByte(tableId.length);
+        buffer.writeBytes(tableId);
+    }
+
     public void writeObject(DataOutputStream aOutputStream)
         throws IOException {
         hashCode();

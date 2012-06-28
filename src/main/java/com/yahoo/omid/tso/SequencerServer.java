@@ -62,7 +62,7 @@ public class SequencerServer extends TSOServer {
         try {
             for (int i = 0; i < soConfs.length; i++) {
                 final int id = 0;//the id does not matter here
-                tsoClients[i] = new TSOClient(soConfs[i], 0);
+                tsoClients[i] = new TSOClient(soConfs[i], 0, false);
             }
         } catch (IOException e) {
             LOG.error("SO is not available " + e);

@@ -57,6 +57,7 @@ import com.yahoo.omid.IsolationLevel;
 import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  * ChannelHandler for the TSO Server
@@ -66,17 +67,23 @@ import java.util.HashSet;
 public class SequencerHandler extends SimpleChannelHandler {
 
     private static final Log LOG = LogFactory.getLog(SequencerHandler.class);
+    static long BROADCAST_TIMEOUT = 1;
+
+    TSOSharedMessageBuffer sharedMessageBuffer;
 
     /**
      * Bytes monitor
      */
     public static int globaltxnCnt = 0;
 
+    ScheduledExecutorService broadcasters = null;
+
     /**
      * Channel Group
      */
     private ChannelGroup channelGroup = null;
-    private static ChannelGroup clientChannels = new DefaultChannelGroup("clients");
+
+    private Map<TSOClient, ReadingBuffer> messageBuffersMap = new HashMap<TSOClient, ReadingBuffer>();
 
     /**
      * The interface to the tsos
@@ -88,8 +95,41 @@ public class SequencerHandler extends SimpleChannelHandler {
      * @param channelGroup
      */
     public SequencerHandler(ChannelGroup channelGroup, TSOClient[] tsoClients) {
+        this.broadcasters = Executors.newScheduledThreadPool(tsoClients.length);
         this.channelGroup = channelGroup;
         this.tsoClients = tsoClients;
+        this.sharedMessageBuffer = new TSOSharedMessageBuffer(null);
+        for (TSOClient tsoClient: tsoClients) {
+            initReadBuffer(tsoClient);
+        }
+    }
+
+    void initReadBuffer(TSOClient tsoClient) {
+        ReadingBuffer buffer;
+        synchronized (messageBuffersMap) {
+            buffer = messageBuffersMap.get(tsoClient);
+            if (buffer == null) {
+                buffer = sharedMessageBuffer.new ReadingBuffer(tsoClient);
+                messageBuffersMap.put(tsoClient, buffer);
+                LOG.warn("init buffer for: " + tsoClient);
+            } else {
+                LOG.error("buffer already mapped to the tso! " + tsoClient);
+            }
+        }
+        broadcasters.scheduleAtFixedRate(new BroadcastThread(buffer), 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
+    }
+
+    private class BroadcastThread implements Runnable {
+        ReadingBuffer buffer;
+        public BroadcastThread(ReadingBuffer buffer) {
+            this.buffer = buffer;
+        }
+        @Override
+        public void run() {
+            synchronized (sharedMessageBuffer) {
+                buffer.flush();
+            }
+        }
     }
 
     /**
@@ -110,8 +150,8 @@ public class SequencerHandler extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
-        if (msg instanceof Peerable && msg instanceof TSOMessage)
-            multicast((TSOMessage)msg, ctx);
+        //if (msg instanceof Peerable && msg instanceof TSOMessage)
+        multicast((TSOMessage)msg, ctx);
     }
 
     /**
@@ -119,6 +159,10 @@ public class SequencerHandler extends SimpleChannelHandler {
      * It has to be synchnronized to ensure atmoic broadcast
      */
     public void multicast(TSOMessage msg, ChannelHandlerContext ctx) {
+        synchronized (sharedMessageBuffer) {
+            sharedMessageBuffer.writeMessage(msg);
+        }
+        /*
         try {
             synchronized (tsoClients) {
                 for (TSOClient tsoClient: tsoClients) {
@@ -129,6 +173,7 @@ public class SequencerHandler extends SimpleChannelHandler {
             e.printStackTrace();
             //TODO: send nack back to client
         }
+        */
     }
 
     private boolean finish;

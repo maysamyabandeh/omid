@@ -126,6 +126,23 @@ public class CommitRequest implements TSOMessage, Peerable {
 
     @Override
     public void writeObject(ChannelBuffer buffer)  {
+        buffer.writeLong(startTimestamp);
+        buffer.writeByte(prepared ? 1 : 0);
+        buffer.writeByte(successfulPrepared ? 1 : 0);
+        buffer.writeInt(writtenRows.length);
+        for (RowKey r: writtenRows) {
+            r.writeObject(buffer);
+        }
+        buffer.writeInt(readRows.length);
+        for (RowKey r: readRows) {
+            r.writeObject(buffer);
+        }
+        if (peerIsSpecified()) {
+            buffer.writeByte(1);
+            buffer.writeInt(peerId);
+        } else {
+            buffer.writeByte(0);
+        }
     }
 
     @Override

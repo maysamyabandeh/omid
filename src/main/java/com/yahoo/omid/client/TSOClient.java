@@ -48,6 +48,9 @@ import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory;
 import org.jboss.netty.handler.execution.ExecutionHandler;
 import org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.channel.ChannelFuture;
+
 
 import com.yahoo.omid.tso.Committed;
 import com.yahoo.omid.tso.RowKey;
@@ -76,7 +79,7 @@ import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.Statistics;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class TSOClient extends SimpleChannelHandler {
+public class TSOClient extends SimpleChannelHandler implements Comparable<TSOClient> {
     private static final Log LOG = LogFactory.getLog(TSOClient.class);
 
     public static long askedTSO = 0;
@@ -103,8 +106,8 @@ public class TSOClient extends SimpleChannelHandler {
 
     private ChannelFactory factory;
     private ClientBootstrap bootstrap;
-    private Channel channel;
-    private InetSocketAddress addr;
+    Channel channel;
+    InetSocketAddress addr;
     private int max_retries;
     private int retries;
     private int retry_delay_ms;
@@ -116,21 +119,22 @@ public class TSOClient extends SimpleChannelHandler {
     };
 
     private interface Op {
-        public void execute(Channel channel);
+        public ChannelFuture execute(Channel channel);
 
         public void error(Exception e);
     }
 
-    private class MessageOp<MSG extends TSOMessage> implements Op {
-        MSG msg;
+    private class BufferOp implements Op {
+        ChannelBuffer msg;
 
-        MessageOp(MSG msg) {
+        BufferOp(ChannelBuffer msg) {
             this.msg = msg;
         }
 
-        public void execute(Channel channel) {
+        public ChannelFuture execute(Channel channel) {
+            ChannelFuture f = null;
             try {
-                ChannelFuture f = channel.write(msg);
+                f = channel.write(msg);
                 f.addListener(new ChannelFutureListener() {
                     public void operationComplete(ChannelFuture future) {
                         if (!future.isSuccess()) {
@@ -141,6 +145,35 @@ public class TSOClient extends SimpleChannelHandler {
             } catch (Exception e) {
                 error(e);
             }
+            return f;
+        }
+
+        public void error(Exception e) {
+        }
+    }
+
+    private class MessageOp<MSG extends TSOMessage> implements Op {
+        MSG msg;
+
+        MessageOp(MSG msg) {
+            this.msg = msg;
+        }
+
+        public ChannelFuture execute(Channel channel) {
+            ChannelFuture f = null;
+            try {
+                f = channel.write(msg);
+                f.addListener(new ChannelFutureListener() {
+                    public void operationComplete(ChannelFuture future) {
+                        if (!future.isSuccess()) {
+                            error(new IOException("Error writing to socket"));
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                error(e);
+            }
+            return f;
         }
 
         public void error(Exception e) {
@@ -170,10 +203,10 @@ public class TSOClient extends SimpleChannelHandler {
     final int myId;
 
     public TSOClient(Properties conf) throws IOException {
-        this(conf,0);
+        this(conf,0,false);
     }
 
-    public TSOClient(Properties conf, int id) throws IOException {
+    public TSOClient(Properties conf, int id, boolean introduceYourself) throws IOException {
         myId = id;
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
@@ -219,7 +252,8 @@ public class TSOClient extends SimpleChannelHandler {
 
         addr = new InetSocketAddress(host, port);
         connectIfNeeded();
-        introducePeerId();
+        if (introduceYourself)
+            introducePeerId();
     }
 
     private State connectIfNeeded() throws IOException {
@@ -243,7 +277,7 @@ public class TSOClient extends SimpleChannelHandler {
         }
     }
 
-    private void withConnection(Op op) throws IOException {
+    private ChannelFuture withConnection(Op op) throws IOException {
         State state = connectIfNeeded();
 
         if (state == State.CONNECTING) {
@@ -253,10 +287,11 @@ public class TSOClient extends SimpleChannelHandler {
                 throw new IOException("Couldn't add new operation", e);
             }
         } else if (state == State.CONNECTED) {
-            op.execute(channel);
+            return op.execute(channel);
         } else {
             throw new IOException("Invalid connection state " + state);
         }
+        return null;//TODO: we need a different kind of listener that does not depend on channel
     }
 
     public void getNewTimestamp(PingPongCallback<TimestampResponse> cb) throws IOException {
@@ -317,8 +352,11 @@ public class TSOClient extends SimpleChannelHandler {
      * Forward a new timestamp request
      * do not wait for the respond
      */
-    public void forward(TSOMessage msg) throws IOException {
-        withConnection(new MessageOp<TSOMessage>(msg));
+    //public void forward(TSOMessage msg) throws IOException {
+        //withConnection(new MessageOp<TSOMessage>(msg));
+    //}
+    public ChannelFuture forward(ChannelBuffer buf) throws IOException {
+        return withConnection(new BufferOp(buf));
     }
 
     /**
@@ -720,6 +758,24 @@ public class TSOClient extends SimpleChannelHandler {
             } 
             isCommittedCallbacks.clear();
         }      
+    }
+
+    @Override
+    public int compareTo(TSOClient other) {
+        return this.channel.compareTo(other.channel);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!(obj instanceof TSOClient))
+            return false;
+        TSOClient tsoobj = (TSOClient) obj;
+        return tsoobj.addr.equals(addr);
+    }
+
+    @Override
+    public int hashCode() {
+        return addr.hashCode();
     }
 
     protected void processMessage(TSOMessage msg) {
