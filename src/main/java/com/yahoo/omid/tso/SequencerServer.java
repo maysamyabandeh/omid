@@ -53,7 +53,7 @@ import org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor;
  * Sequencer Server
  */
 public class SequencerServer extends TSOServer {
-    
+
     private static final Log LOG = LogFactory.getLog(SequencerServer.class);
 
     /**
@@ -75,7 +75,7 @@ public class SequencerServer extends TSOServer {
             System.exit(1);
         }
     }
-    
+
     /**
      * Take two arguments :<br>
      * -port to listen to<br>
@@ -108,31 +108,29 @@ public class SequencerServer extends TSOServer {
         //((SequencerHandler)handler).stop();
     }
 
-class SeqPipelineFactory implements ChannelPipelineFactory {
+    class SeqPipelineFactory implements ChannelPipelineFactory {
 
-   private Executor pipelineExecutor = null;
-   ExecutionHandler x = null;// = new ExecutionHandler(pipelineExecutor);
-   ChannelHandler handler = null;
+        private Executor pipelineExecutor = null;
+        ExecutionHandler x = null;// = new ExecutionHandler(pipelineExecutor);
+        ChannelHandler handler = null;
 
-    public SeqPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
-      super();
-      this.pipelineExecutor = pipelineExecutor;
-      this.handler = handler;
-   }
+        public SeqPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
+            super();
+            this.pipelineExecutor = pipelineExecutor;
+            this.handler = handler;
+        }
 
-   public ChannelPipeline getPipeline() throws Exception {
-      ChannelPipeline pipeline = Channels.pipeline();
-      pipeline.addLast("decoder", new SeqDecoder(sequencerHandler));
-      //pipeline.addLast("encoder", new TSOEncoder());
-      //
-    //synchronized (this) {
-    //  if (x == null)
-    //      x = new ExecutionHandler(pipelineExecutor);
-    //}
-    //pipeline.addLast("pipelineExecutor", x);
-    //pipeline.addLast("handler", handler);
-      return pipeline;
-   }
-}
+        public ChannelPipeline getPipeline() throws Exception {
+            ChannelPipeline pipeline = Channels.pipeline();
+            pipeline.addLast("decoder", new SeqDecoder());
+            synchronized (this) {
+                if (x == null)
+                    x = new ExecutionHandler(pipelineExecutor);
+            }
+            pipeline.addLast("pipelineExecutor", x);
+            pipeline.addLast("handler", handler);
+            return pipeline;
+        }
+    }
 
 }

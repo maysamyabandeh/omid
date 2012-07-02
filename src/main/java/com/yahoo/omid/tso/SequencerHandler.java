@@ -150,10 +150,6 @@ public class SequencerHandler extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
-        //if (msg instanceof Peerable && msg instanceof TSOMessage)
-        //multicast((TSOMessage)msg, ctx);
-        System.out.println("messageReceived should not be involed");
-        System.exit(1);
         multicast((ChannelBuffer)msg);
     }
 
