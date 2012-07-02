@@ -343,7 +343,8 @@ public class TSOHandler extends SimpleChannelHandler {
             PrepareCommit prep = txnHistory.remove(msg.getStartTimestamp());
             assert(prep != null);
             if (prep == null)
-                LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory);
+                LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory.size());
+                //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory);
             msg.readRows = prep.readRows;
             msg.writtenRows = prep.writtenRows;
             reply.committed = msg.successfulPrepared;

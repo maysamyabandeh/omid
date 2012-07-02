@@ -151,29 +151,20 @@ public class SequencerHandler extends SimpleChannelHandler {
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
         //if (msg instanceof Peerable && msg instanceof TSOMessage)
-        multicast((TSOMessage)msg, ctx);
+        //multicast((TSOMessage)msg, ctx);
+        System.out.println("messageReceived should not be involed");
+        System.exit(1);
+        multicast((ChannelBuffer)msg);
     }
 
     /**
      * Handle a received message
      * It has to be synchnronized to ensure atmoic broadcast
      */
-    public void multicast(TSOMessage msg, ChannelHandlerContext ctx) {
+    public void multicast(ChannelBuffer buf) {
         synchronized (sharedMessageBuffer) {
-            sharedMessageBuffer.writeMessage(msg);
+            sharedMessageBuffer.writeMessage(buf);
         }
-        /*
-        try {
-            synchronized (tsoClients) {
-                for (TSOClient tsoClient: tsoClients) {
-                    tsoClient.forward(msg);
-                }
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-            //TODO: send nack back to client
-        }
-        */
     }
 
     private boolean finish;
@@ -201,5 +192,4 @@ public class SequencerHandler extends SimpleChannelHandler {
         finish = true;
     }
 }
-
 

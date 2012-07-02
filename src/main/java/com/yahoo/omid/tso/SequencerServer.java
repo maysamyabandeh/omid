@@ -16,17 +16,22 @@
 
 package com.yahoo.omid.tso;
 
+import com.yahoo.omid.tso.serialization.SeqDecoder;
+import com.yahoo.omid.tso.serialization.TSOEncoder;
+
 import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.Properties;
 import java.io.IOException;
+import java.util.concurrent.Executor;
 
 import com.yahoo.omid.OmidConfiguration;
 import com.yahoo.omid.client.TSOClient;
 import org.apache.hadoop.conf.Configuration;
 
+import org.jboss.netty.handler.execution.ExecutionHandler;
 import org.jboss.netty.channel.ChannelHandler;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -86,14 +91,48 @@ public class SequencerServer extends TSOServer {
         new SequencerServer(config, omidConf.getStatusOracleConfs()).run();
     }
 
+    SequencerHandler sequencerHandler;
     @Override
     protected ChannelHandler newMessageHandler() {
-        return new SequencerHandler(channelGroup, tsoClients);
+        sequencerHandler = new SequencerHandler(channelGroup, tsoClients);
+        return sequencerHandler;
+    }
+
+    @Override
+    protected ChannelPipelineFactory newPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
+        return new SeqPipelineFactory(pipelineExecutor, handler);
     }
 
     @Override
     protected void stopHandler(ChannelHandler handler) {
         //((SequencerHandler)handler).stop();
     }
+
+class SeqPipelineFactory implements ChannelPipelineFactory {
+
+   private Executor pipelineExecutor = null;
+   ExecutionHandler x = null;// = new ExecutionHandler(pipelineExecutor);
+   ChannelHandler handler = null;
+
+    public SeqPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
+      super();
+      this.pipelineExecutor = pipelineExecutor;
+      this.handler = handler;
+   }
+
+   public ChannelPipeline getPipeline() throws Exception {
+      ChannelPipeline pipeline = Channels.pipeline();
+      pipeline.addLast("decoder", new SeqDecoder(sequencerHandler));
+      //pipeline.addLast("encoder", new TSOEncoder());
+      //
+    //synchronized (this) {
+    //  if (x == null)
+    //      x = new ExecutionHandler(pipelineExecutor);
+    //}
+    //pipeline.addLast("pipelineExecutor", x);
+    //pipeline.addLast("handler", handler);
+      return pipeline;
+   }
 }
 
+}

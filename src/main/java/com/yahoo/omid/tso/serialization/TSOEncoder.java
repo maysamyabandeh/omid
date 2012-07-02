@@ -20,12 +20,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 
 import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBufferOutputStream;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.handler.codec.oneone.OneToOneEncoder;
 
-import com.yahoo.omid.tso.BufferPool;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortRequest;
@@ -50,9 +50,11 @@ public class TSOEncoder extends OneToOneEncoder{
     //just override decode method
     protected Object encode(ChannelHandlerContext ctx, Channel channel, Object msg)
         throws Exception {
-        ByteArrayOutputStream buffer = BufferPool.getBuffer();
-        buffer.reset();
-        DataOutputStream objWrapper = new DataOutputStream(buffer);
+        ChannelBuffer buffer = ChannelBuffers.buffer(1500);
+        ChannelBufferOutputStream bufferstream = new ChannelBufferOutputStream(buffer);
+        DataOutputStream objWrapper = new DataOutputStream(bufferstream);
+        boolean writeSize = msg instanceof TimestampRequest || msg instanceof MultiCommitRequest;
+
         if (msg instanceof ChannelBuffer) {
             return msg;
         } else if (msg instanceof TimestampRequest) {
@@ -90,10 +92,17 @@ public class TSOEncoder extends OneToOneEncoder{
         } else if (msg instanceof LargestDeletedTimestampReport) {
             objWrapper.writeByte(TSOMessage.LargestDeletedTimestampReport);
         } else throw new Exception("Wrong obj");
+
+        if (writeSize)//reserve the size field
+            objWrapper.writeShort(0);
         ((TSOMessage)msg).writeObject(objWrapper);
-        ChannelBuffer result = ChannelBuffers.wrappedBuffer(buffer.toByteArray());
-        BufferPool.pushBuffer(buffer);
-        return result;
+        //For these messages, update the size field which is the first field in the msg
+        if (writeSize) {
+            int size = buffer.readableBytes();
+            buffer.setShort(1, size);//the first byte is the type, then size, then the rest
+        }
+
+        return buffer;
     }
 }
 

@@ -778,6 +778,11 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
         return addr.hashCode();
     }
 
+    @Override
+    public String toString() {
+        return channel.toString();
+    }
+
     protected void processMessage(TSOMessage msg) {
         // TODO Auto-generated method stub
     }

@@ -21,6 +21,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
+import java.util.concurrent.Executor;
+
 import com.yahoo.omid.OmidConfiguration;
 import org.apache.hadoop.conf.Configuration;
 
@@ -93,6 +95,10 @@ public class TSOServer implements Runnable {
         return new TSOHandler(channelGroup, state);
     }
 
+    protected ChannelPipelineFactory newPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
+        return new TSOPipelineFactory(pipelineExecutor, handler);
+    }
+
     @Override
     public void run() {
         Configuration conf = OmidConfiguration.create();
@@ -136,7 +142,9 @@ public class TSOServer implements Runnable {
         //final TSOHandler handler = new TSOHandler(channelGroup, state);
         final ChannelHandler handler = newMessageHandler();
 
-        bootstrap.setPipelineFactory(new TSOPipelineFactory(pipelineExecutor, handler));
+        ChannelPipelineFactory pipelineFactory = newPipelineFactory(pipelineExecutor, handler);
+        bootstrap.setPipelineFactory(pipelineFactory);
+        //bootstrap.setPipelineFactory(new TSOPipelineFactory(pipelineExecutor, handler));
         bootstrap.setOption("tcpNoDelay", false);
         bootstrap.setOption("child.tcpNoDelay", false);
         bootstrap.setOption("child.keepAlive", true);

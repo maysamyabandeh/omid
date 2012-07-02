@@ -121,6 +121,7 @@ public class TSOSharedMessageBuffer {
               temp = readBuffer.slice(readerIndex, readable);
           }
           //ChannelFuture future = Channels.write(channel, temp);
+          //System.out.println(" CONSUME: " + readerIndex + " " + readable + " " + consumer);
           ChannelFuture future = consumer.consume(temp);
           //TODO: future could be null since the corresponding channel is not connected
           readerIndex += readable;
@@ -173,6 +174,11 @@ public class TSOSharedMessageBuffer {
            }
 
            @Override
+           public String toString() {
+               return channel.toString();
+           }
+
+           @Override
            public int compareTo(Consumer c) {
                if (!(c instanceof ChannelConsumer))
                    return -1;//TODO: it is ugly
@@ -194,6 +200,11 @@ public class TSOSharedMessageBuffer {
 
            public TSOConsumer(TSOClient tsoClient) {
                this.tsoClient = tsoClient;
+           }
+
+           @Override
+           public String toString() {
+               return tsoClient.toString();
            }
 
            public ChannelFuture consume(ChannelBuffer data) {
@@ -388,6 +399,8 @@ public class TSOSharedMessageBuffer {
     * This is used by the sequencer which forwards these two messages
     */
    public void writeMessage(TSOMessage msg) {
+       System.out.println("DEPRECATED writeMessage");
+       System.exit(1);
        ++_Writes;
        final int MAX_RETRY = 5;
        int readBefore = 0;
@@ -428,6 +441,21 @@ public class TSOSharedMessageBuffer {
        _Avg2 += (written - _Avg2) / _Writes;
    }
 
+   /**
+    * This is used by the sequencer which forwards these two messages
+    */
+   public void writeMessage(ChannelBuffer buf) {
+       ++_Writes;
+       if (writeBuffer.writableBytes() < buf.readableBytes()) {
+           nextBuffer();
+       }
+       int readBefore = writeBuffer.readableBytes();
+
+       writeBuffer.writeBytes(buf);
+
+       int written = writeBuffer.readableBytes() - readBefore;
+       _Avg2 += (written - _Avg2) / _Writes;
+   }
    public void writeReincarnatedElder(long startTimestamp) {
       if (writeBuffer.writableBytes() < 30) {
          nextBuffer();

@@ -147,6 +147,9 @@ public class TSODecoder extends FrameDecoder {
                         throw new Exception("Wrong type " + type + " " + ostream.toString().length());
                 }
             }
+            final boolean readSize = type == TSOMessage.TimestampRequest || type == TSOMessage.MultiCommitRequest;
+            if (readSize)//read the size field and discard it
+                ostream.readShort();
             msg.readObject(ostream);
         } catch (IndexOutOfBoundsException e) {
             // Not enough byte in the buffer, reset to the start for the next try

@@ -478,7 +478,7 @@ while (curMessage > 0) {
         }
 
         protected void launchBenchmark() {
-            launchLocalBenchmark();
+            //launchLocalBenchmark();
         }
 
         /**
