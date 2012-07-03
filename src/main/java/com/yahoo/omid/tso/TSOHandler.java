@@ -371,12 +371,12 @@ public class TSOHandler extends SimpleChannelHandler {
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.getStartTimestamp());
         if (reply.committed) {
-            if (msg.prepared)
+            if (msg.globalTxn)
                 globaltxnCnt++;
             else
                 txnCnt++;
         } else {
-            if (msg.prepared)
+            if (msg.globalTxn)
                 globalabortCount++;
             else
                 abortCount++;

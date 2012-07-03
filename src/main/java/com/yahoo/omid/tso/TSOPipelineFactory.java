@@ -77,7 +77,7 @@ public class TSOPipelineFactory implements ChannelPipelineFactory {
       }
       pipeline.addLast("pipelineExecutor", x);
 //      pipeline.addLast("timeout", new WriteTimeoutHandler(timer, 10));
-      pipeline.addFirst("bw", bwhandler);
+      //pipeline.addFirst("bw", bwhandler);
       
       pipeline.addLast("handler", handler);
       return pipeline;

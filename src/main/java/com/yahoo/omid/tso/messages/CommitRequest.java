@@ -94,6 +94,12 @@ public class CommitRequest implements TSOMessage, Peerable {
     public RowKey[] writtenRows;
     public RowKey[] readRows;
 
+    /**
+     * Is it part of a global transaction.
+     * Need this only for statiscal purposes, specially for readonly txns
+     */
+    public boolean globalTxn = false;
+
     @Override
     public String toString() {
         return "CommitRequest: T_s:" + startTimestamp + " prepared: " + prepared;
@@ -122,6 +128,8 @@ public class CommitRequest implements TSOMessage, Peerable {
         if (p == 1) { //peerIsSpecified
             peerId = aInputStream.readInt();
         }
+        byte g = aInputStream.readByte();
+        globalTxn = g == 1;
     }
 
     @Override
@@ -143,6 +151,7 @@ public class CommitRequest implements TSOMessage, Peerable {
         } else {
             buffer.writeByte(0);
         }
+        buffer.writeByte(globalTxn ? 1 : 0);
     }
 
     @Override
@@ -164,6 +173,7 @@ public class CommitRequest implements TSOMessage, Peerable {
         } else {
             aOutputStream.writeByte(0);
         }
+        aOutputStream.writeByte(globalTxn ? 1 : 0);
     }
 }
 

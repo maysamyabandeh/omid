@@ -56,21 +56,25 @@ public class MultiCommitRequest extends CommitRequest {
     }
 
     public MultiCommitRequest() {
+        globalTxn = true;
     }
 
     public MultiCommitRequest(long[] startTimestamps) {
+        this();
         this.startTimestamps = startTimestamps;
         this.writtenRows = new RowKey[0];
         this.readRows = new RowKey[0];
     }
 
     public MultiCommitRequest(long[] startTimestamps, RowKey[] writtenRows) {
+        this();
         this.startTimestamps = startTimestamps;
         this.writtenRows = writtenRows;
         this.readRows = new RowKey[0];
     }
 
     public MultiCommitRequest(long[] startTimestamps, RowKey[] writtenRows, RowKey[] readRows) {
+        this();
         this.startTimestamps = startTimestamps;
         this.writtenRows = writtenRows;
         this.readRows = readRows;
