@@ -73,7 +73,19 @@ public class Bucket {
    }
 
    public synchronized void commit(long id) {
-      transactions.set((int) (id % BUCKET_SIZE));
+       int index = (int) (id % BUCKET_SIZE);
+       boolean isAlreadySet = transactions.get(index);
+       if (isAlreadySet) {
+           System.out.println("Double commit! " + id);
+           try {
+               throw new Exception();
+           } catch (Exception e) {
+               e.printStackTrace();
+           }
+           System.exit(1);
+           //TODO: handle properly
+       }
+       transactions.set(index);
       ++transactionsCommited;
    }
 

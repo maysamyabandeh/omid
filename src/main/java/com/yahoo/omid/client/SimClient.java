@@ -57,7 +57,7 @@ import java.util.concurrent.TimeUnit;
 import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelFuture;
 import java.util.concurrent.CountDownLatch;
-
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Simple Transaction Client using Serialization
@@ -167,10 +167,11 @@ public class SimClient {
         try {
             latch = new CountDownLatch(1 + soConfs.length);
             int id = generateUniqueId(index);
-            sequencerClient = new SimSequencerClient(sequencerConf, id);
+            AtomicLong sequenceGenerator = new AtomicLong();
+            sequencerClient = new SimSequencerClient(sequencerConf, id, sequenceGenerator);
             tsoClients = new SimTSOClient[soConfs.length];
             for (int i = 0; i < soConfs.length; i++)
-                tsoClients[i] = new SimTSOClient(soConfs[i], id);
+                tsoClients[i] = new SimTSOClient(soConfs[i], id, sequenceGenerator);
         } catch (IOException e) {
             latch = new CountDownLatch(0);
         }
@@ -194,8 +195,8 @@ public class SimClient {
 
     class SimSequencerClient extends SimTSOClient {
         static final boolean INTRODUCE = true;
-        public SimSequencerClient(Properties conf, int id) throws IOException {
-            super(conf, id, INTRODUCE==false);
+        public SimSequencerClient(Properties conf, int id, AtomicLong sequenceGenerator) throws IOException {
+            super(conf, id, INTRODUCE==false, sequenceGenerator);
         }
 
         /**
@@ -232,12 +233,13 @@ while (curMessage > 0) {
     curMessage--;
     try {
         //1. get a vector timestamp
+        boolean readOnly = (rnd.nextFloat() * 100) < percentReads;
         PingPongCallback<TimestampResponse>[] tscbs;
         tscbs = new PingPongCallback[tsoClients.length];
         long sequence = sequenceGenerator.getAndIncrement();
         for (int i = 0; i < tsoClients.length; i++)
             tscbs[i] = tsoClients[i].registerTimestampCallback(sequence);
-        getNewIndirectTimestamp(sequence);
+        getNewIndirectTimestamp(sequence, readOnly);
         boolean failed = false;
         for (int i = 0; i < tsoClients.length; i++) {
             tscbs[i].await();
@@ -249,7 +251,6 @@ while (curMessage > 0) {
         //2. run the transation
         ReadWriteRows[] rw = new ReadWriteRows[tsoClients.length];
         int remainedSize = GLOBAL_MAX_ROW;
-        boolean readOnly = (rnd.nextFloat() * 100) < percentReads;
         for (int i = 0; i < tsoClients.length; i++) {
             float fshare = remainedSize / (float)(tsoClients.length - i);
             int share = (int)Math.ceil(fshare);//use ceil to avoid 0 share
@@ -293,23 +294,24 @@ while (curMessage > 0) {
             if (failed)
                 throw new TransactionException("Error committing", null);
         } else {//readOnly
-            PingPongCallback<CommitResponse>[] tccbs;
-            tccbs = new PingPongCallback[tsoClients.length];
-            for (int i = 0; i < tsoClients.length; i++) {
-                long ts = tscbs[i].getPong().timestamp;
-                tccbs[i] = new PingPongCallback<CommitResponse>();
-                CommitRequest cr = new CommitRequest(ts);
-                cr.globalTxn = true;
-                tsoClients[i].sendCommitRequest(cr, tccbs[i]);
-            }
-            failed = false;
-            for (int i = 0; i < tsoClients.length; i++) {
-                tccbs[i].await();
-                if (tccbs[i].getException() != null)
-                    failed = true;
-            }
-            if (failed)
-                throw new TransactionException("Error committing", null);
+            //Do nothing, no need to commit if trackProgress is set to false in start timestamp request
+        //PingPongCallback<CommitResponse>[] tccbs;
+        //tccbs = new PingPongCallback[tsoClients.length];
+        //for (int i = 0; i < tsoClients.length; i++) {
+        //    long ts = tscbs[i].getPong().timestamp;
+        //    tccbs[i] = new PingPongCallback<CommitResponse>();
+        //    CommitRequest cr = new CommitRequest(ts);
+        //    cr.globalTxn = true;
+        //    tsoClients[i].sendCommitRequest(cr, tccbs[i]);
+        //}
+        //failed = false;
+        //for (int i = 0; i < tsoClients.length; i++) {
+        //    tccbs[i].await();
+        //    if (tccbs[i].getException() != null)
+        //        failed = true;
+        //}
+        //if (failed)
+        //    throw new TransactionException("Error committing", null);
         }
         //System.out.print("+");
     } catch (TransactionException e) {
@@ -345,11 +347,11 @@ while (curMessage > 0) {
         private long totalSimulatedTxns = 0;
 
         static final boolean INTRODUCE = true;
-        public SimTSOClient(Properties conf, int id) throws IOException {
-            this(conf, id, INTRODUCE==true);
+        public SimTSOClient(Properties conf, int id, AtomicLong sequenceGenerator) throws IOException {
+            this(conf, id, INTRODUCE==true, sequenceGenerator);
         }
-        public SimTSOClient(Properties conf, int id, boolean introduceYourself) throws IOException {
-            super(conf, id, introduceYourself);
+        public SimTSOClient(Properties conf, int id, boolean introduceYourself, AtomicLong sequenceGenerator) throws IOException {
+            super(conf, id, introduceYourself, sequenceGenerator);
             this.curMessage = nbMessage;
         }
 
@@ -430,9 +432,8 @@ while (curMessage > 0) {
          * @param timestamp
          * @param channel
          */
-        private void sendCommitRequest(final long timestamp, final PingPongCallback<CommitResponse> tccb) {
+        private void sendCommitRequest(final long timestamp, final PingPongCallback<CommitResponse> tccb, boolean readOnly) {
             RowKey [] writtenRows, readRows;
-            boolean readOnly = (rnd.nextFloat() * 100) < percentReads;
             ReadWriteRows rw = simulateATransaction(timestamp, GLOBAL_MAX_ROW, readOnly);
             CommitRequest crmsg = new CommitRequest(timestamp, rw.writtenRows, rw.readRows);
             sendCommitRequest(crmsg, tccb);
@@ -515,16 +516,23 @@ while (curMessage > 0) {
                         while (curMessage > 0) {
                             curMessage--;
                             final PingPongCallback<TimestampResponse> tscb = new PingPongCallback<TimestampResponse>();
+                            boolean readOnly = (rnd.nextFloat() * 100) < percentReads;
                             try {
-                                getNewTimestamp(tscb);
+                                if (readOnly) {
+                                    long sequence = sequenceGenerator.getAndIncrement();
+                                    getNewTimestamp(tscb, sequence);
+                                } else
+                                    getNewTimestamp(tscb);
                                 tscb.await();
                                 if (tscb.getException() != null)
                                     throw tscb.getException();
-                                TimestampResponse pong = tscb.getPong();
-                                PingPongCallback<CommitResponse> tccb = new PingPongCallback<CommitResponse>();
-                                sendCommitRequest( pong.timestamp, tccb );
-                                tccb.await();
-                                handle(tccb.getPong());
+                                if (!readOnly) {
+                                    TimestampResponse pong = tscb.getPong();
+                                    PingPongCallback<CommitResponse> tccb = new PingPongCallback<CommitResponse>();
+                                    sendCommitRequest( pong.timestamp, tccb, readOnly );
+                                    tccb.await();
+                                    handle(tccb.getPong());
+                                }
                             } catch (InterruptedException e) {
                                 e.printStackTrace();
                             } catch (IOException e) {

@@ -254,8 +254,14 @@ public class TSOHandler extends SimpleChannelHandler {
                     timestamp = timestampOracle.next(sharedState.toWAL);
                 }
                 //if we do not want to keep track of the commit, simply set it finished
-                if (!msg.trackProgress)
+                if (!msg.trackProgress) {
                     sharedState.uncommited.finished(timestamp);
+                    //consider the transaction as committed
+                    if (msg.globalTxn)
+                        globaltxnCnt++;
+                    else
+                        txnCnt++;
+                }
                 if (msg.isSequenced())
                     response = new TimestampResponse(timestamp, msg.getSequence());
                 else

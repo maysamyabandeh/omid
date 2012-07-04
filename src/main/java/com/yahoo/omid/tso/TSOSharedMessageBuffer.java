@@ -264,7 +264,7 @@ public class TSOSharedMessageBuffer {
    
    public void writeTimestamp(TimestampResponse tr) {
        wrap = true;
-       tBuffer = ChannelBuffers.buffer(1 + TimestampResponse.sizeInBytes());
+       tBuffer = ChannelBuffers.buffer(1 + 30);//30 is overestimation of tr size
        tBuffer.writeByte(TSOMessage.TimestampResponse);
        tr.writeObject(tBuffer);
    }

@@ -112,7 +112,8 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
     private int retries;
     private int retry_delay_ms;
     private Timer retryTimer;
-    protected AtomicLong sequenceGenerator = new AtomicLong();
+    //The sequenc generator must be shared among all TSOClients run by a client
+    protected AtomicLong sequenceGenerator;// = new AtomicLong();
 
     private enum State {
         DISCONNECTED, CONNECTING, CONNECTED, RETRY_CONNECT_WAIT
@@ -202,12 +203,21 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
      */
     final int myId;
 
+    public TSOClient(Properties conf, AtomicLong sequenceGenerator) throws IOException {
+        this(conf,0,false, sequenceGenerator);
+    }
+
     public TSOClient(Properties conf) throws IOException {
-        this(conf,0,false);
+        this(conf,0,false, null);
     }
 
     public TSOClient(Properties conf, int id, boolean introduceYourself) throws IOException {
+        this(conf, id, introduceYourself, null);
+    }
+
+    public TSOClient(Properties conf, int id, boolean introduceYourself, AtomicLong sequenceGenerator) throws IOException {
         myId = id;
+        this.sequenceGenerator = sequenceGenerator;
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
         retryTimer = new Timer(true);
@@ -299,10 +309,28 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
         getNewTimestamp(tr, cb);
     }
 
-    public void getNewTimestamp(boolean trackProgress, PingPongCallback<TimestampResponse> cb) throws IOException {
+    /**
+     * the readonly timestmap requests set a falg in the server, so
+     * they should be differentiated from normal timestmap requests
+     * a readonly flag in response is enough but to be uniform 
+     * I am using the already existing sequence
+     */
+    public void getNewTimestamp(PingPongCallback<TimestampResponse> cb, long sequence) throws IOException {
         TimestampRequest tr = new TimestampRequest();
-        tr.trackProgress = trackProgress;
-        getNewTimestamp(tr, cb);
+        tr.trackProgress = false;
+        tr.sequence = sequence;
+        synchronized(sequencedTimestampCallbacks) {
+            sequencedTimestampCallbacks.put(sequence, cb);
+        }
+        withConnection(new SyncMessageOp<TimestampRequest>(tr, cb) {
+            @Override
+            public void error(Exception e) {
+                synchronized(sequencedTimestampCallbacks) {
+                    sequencedTimestampCallbacks.remove(msg.getSequence());
+                }
+                cb.error(e);
+            }
+        });
     }
 
     /**
@@ -326,6 +354,16 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
         TimestampRequest tr = new TimestampRequest();
         tr.peerId = myId;
         tr.sequence = sequence;
+        tr.globalTxn = true;
+        withConnection(new MessageOp<TimestampRequest>(tr));
+    }
+    public void getNewIndirectTimestamp(long sequence, boolean readOnly) throws IOException {
+        TimestampRequest tr = new TimestampRequest();
+        tr.peerId = myId;
+        tr.sequence = sequence;
+        //readOnly transactions do not need the so to keep track of their commit
+        tr.trackProgress = !readOnly;
+        tr.globalTxn = true;
         withConnection(new MessageOp<TimestampRequest>(tr));
     }
 
@@ -627,7 +665,7 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
                     cb = createCallbacks.poll();
                 }
             if (cb == null) {
-                LOG.error("Receiving a timestamp response, but none requested: " + tr.timestamp);
+                LOG.error("Receiving a timestamp response, but none requested: " + tr);
                 return;
             }
             cb.complete((TimestampResponse)msg);

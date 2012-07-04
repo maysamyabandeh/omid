@@ -69,14 +69,7 @@ public class TimestampResponse implements TSOMessage, Sequencable {
 
    @Override
    public String toString() {
-      return "TimestampResponse: T_s:" + timestamp;
-   }
-
-   /**
-    * hack: update this function whenever you change writeObject function
-    */
-   public static int sizeInBytes() {
-       return 17;//byte + long + long
+      return "TimestampResponse: T_s:" + timestamp + " sequence: " + sequence;
    }
 
    @Override
@@ -88,7 +81,6 @@ public class TimestampResponse implements TSOMessage, Sequencable {
       } else {
           buffer.writeByte(0);
       }
-       //NOTE: update sizeInBytes as well
    }
 
    @Override
@@ -101,7 +93,6 @@ public class TimestampResponse implements TSOMessage, Sequencable {
       }
    }
 
-//   static byte[] dummy = new byte [1100];
    @Override
    public void writeObject(DataOutputStream aOutputStream) throws IOException {
       aOutputStream.writeLong(timestamp);
