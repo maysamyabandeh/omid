@@ -58,6 +58,7 @@ import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.concurrent.ScheduledExecutorService;
+import com.yahoo.omid.sharedlog.*;
 
 /**
  * ChannelHandler for the TSO Server
@@ -69,7 +70,7 @@ public class SequencerHandler extends SimpleChannelHandler {
     private static final Log LOG = LogFactory.getLog(SequencerHandler.class);
     static long BROADCAST_TIMEOUT = 1;
 
-    TSOSharedMessageBuffer sharedMessageBuffer;
+    SharedLog sharedLog;
 
     /**
      * Bytes monitor
@@ -83,12 +84,13 @@ public class SequencerHandler extends SimpleChannelHandler {
      */
     private ChannelGroup channelGroup = null;
 
-    private Map<TSOClient, ReadingBuffer> messageBuffersMap = new HashMap<TSOClient, ReadingBuffer>();
+    private Map<TSOClient, LogReader> messageBuffersMap = new HashMap<TSOClient, LogReader>();
 
     /**
      * The interface to the tsos
      */
-    TSOClient[] tsoClients;
+    //TSOClient[] tsoClients;
+    LogWriter logWriter;
 
     /**
      * Constructor
@@ -97,37 +99,56 @@ public class SequencerHandler extends SimpleChannelHandler {
     public SequencerHandler(ChannelGroup channelGroup, TSOClient[] tsoClients) {
         this.broadcasters = Executors.newScheduledThreadPool(tsoClients.length);
         this.channelGroup = channelGroup;
-        this.tsoClients = tsoClients;
-        this.sharedMessageBuffer = new TSOSharedMessageBuffer(null);
+        //this.tsoClients = tsoClients;
+        this.sharedLog = new SharedLog();
+        this.logWriter = new LogWriter(sharedLog);
         for (TSOClient tsoClient: tsoClients) {
-            initReadBuffer(tsoClient);
+            initReadBuffer(tsoClient, logWriter);
         }
     }
 
-    void initReadBuffer(TSOClient tsoClient) {
-        ReadingBuffer buffer;
+    void initReadBuffer(TSOClient tsoClient, LogWriter logWriter) {
+        LogReader logReader;
         synchronized (messageBuffersMap) {
-            buffer = messageBuffersMap.get(tsoClient);
-            if (buffer == null) {
-                buffer = sharedMessageBuffer.new ReadingBuffer(tsoClient);
-                messageBuffersMap.put(tsoClient, buffer);
-                LOG.warn("init buffer for: " + tsoClient);
+            logReader = messageBuffersMap.get(tsoClient);
+            if (logReader == null) {
+                logReader = new LogReader(sharedLog, logWriter);
+                messageBuffersMap.put(tsoClient, logReader);
+                LOG.warn("init reader for: " + tsoClient);
             } else {
-                LOG.error("buffer already mapped to the tso! " + tsoClient);
+                LOG.error("reader already mapped to the tso! " + tsoClient);
             }
         }
-        broadcasters.scheduleAtFixedRate(new BroadcastThread(buffer), 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
+        broadcasters.scheduleAtFixedRate(new BroadcastThread(tsoClient, logReader), 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
     }
 
     private class BroadcastThread implements Runnable {
-        ReadingBuffer buffer;
-        public BroadcastThread(ReadingBuffer buffer) {
-            this.buffer = buffer;
+        TSOClient tsoClient;
+        LogReader logReader;
+        public BroadcastThread(TSOClient tsoClient, LogReader logReader) {
+            this.tsoClient = tsoClient;
+            this.logReader = logReader;
         }
         @Override
         public void run() {
-            synchronized (sharedMessageBuffer) {
-                buffer.flush();
+            try {
+                ChannelBuffer tail = logReader.tail();
+                if (tail == null)
+                    return;
+                TSOSharedMessageBuffer._flushes++;
+                TSOSharedMessageBuffer._flSize += tail.readableBytes();
+                tsoClient.forward(tail);
+            } catch (SharedLogLateFollowerException lateE) {
+                //TODO do something
+                lateE.printStackTrace();
+            } catch (SharedLogException sharedE) {
+                //TODO do something
+                sharedE.printStackTrace();
+            } catch (IOException ioE) {
+                //TODO do something
+                ioE.printStackTrace();
+            } catch (Exception e) {
+                e.printStackTrace();
             }
         }
     }
@@ -153,13 +174,22 @@ public class SequencerHandler extends SimpleChannelHandler {
         multicast((ChannelBuffer)msg);
     }
 
+    long writeCnt = 0;
+    long writeSize = 0;
     /**
      * Handle a received message
      * It has to be synchnronized to ensure atmoic broadcast
      */
     public void multicast(ChannelBuffer buf) {
-        synchronized (sharedMessageBuffer) {
-            sharedMessageBuffer.writeMessage(buf);
+        writeCnt ++;
+        writeSize += buf.readableBytes();
+        TSOSharedMessageBuffer._Avg2 = writeSize / (float) writeCnt;
+        TSOSharedMessageBuffer._Writes = writeSize;
+        try {
+            logWriter.append(buf);
+        } catch (SharedLogException sharedE) {
+            //TODO do something
+            sharedE.printStackTrace();
         }
     }
 

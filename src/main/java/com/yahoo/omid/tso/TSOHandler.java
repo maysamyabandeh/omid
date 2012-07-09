@@ -195,6 +195,7 @@ public class TSOHandler extends SimpleChannelHandler {
             handle((PrepareCommit) msg, channel);
             return;
         }
+        LOG.error("Unknown message received at TSO: " + msg + " to " + channel);
     }
 
     public void handle(AbortRequest msg, Channel channel) {
@@ -228,9 +229,6 @@ public class TSOHandler extends SimpleChannelHandler {
         peerToChannelMap.put(peerId, channel);
     }
 
-    /**
-     * Handle the TimestampRequest message
-     */
     public Channel getPeerChannel(Peerable msg) {
         Channel channel = null;
         //see if the peer of the communication is not the sender
@@ -245,6 +243,9 @@ public class TSOHandler extends SimpleChannelHandler {
         return channel;
     }
 
+    /**
+     * Handle the TimestampRequest message
+     */
     public void handle(TimestampRequest msg, Channel channel) {
         TimestampResponse response = null;
         synchronized (sharedState) {
