@@ -54,7 +54,7 @@ import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerConstants;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 
-class BookKeeperStateLogger implements StateLogger {
+public class BookKeeperStateLogger implements StateLogger {
     private static final Log LOG = LogFactory.getLog(BookKeeperStateLogger.class);
     
     private ZooKeeper zk;
@@ -129,7 +129,7 @@ class BookKeeperStateLogger implements StateLogger {
     /**
      * Constructor creates a zookeeper and a bookkeeper objects.
      */
-    BookKeeperStateLogger(ZooKeeper zk) {
+    public BookKeeperStateLogger(ZooKeeper zk) {
         if(LOG.isDebugEnabled()){
             LOG.debug("Constructing Logger");
         }

@@ -39,6 +39,9 @@ public class Statistics {
             REINCARNATION,//number of reincarnations
             ASKTSO,//number of queries sent to tso
             EMPTY_GET,//number of hbase get that return nothing
+            EMPTY_FOR_PERSISTENCE,//number of reads by persistence that return null
+            EMPTY_FOR_BROADCAST,//number of reads by sequencer boradcaster that return null
+            TO_BE_PERSISTED_SIZE,//number of bytes read by persister
             dummy
     }
     static class History {
@@ -57,7 +60,7 @@ public class Statistics {
     }
 
     static public void partialReport(Tag tag, int value) {
-        if(!LOG.isDebugEnabled())
+        if(!LOG.isInfoEnabled())
             return;
         synchronized (histories) {
             History tmpHistory = getHistory(tag, partialChanges);
@@ -66,7 +69,7 @@ public class Statistics {
     }
 
     static public void partialReportOver(Tag tag) {
-        if(!LOG.isDebugEnabled())
+        if(!LOG.isInfoEnabled())
             return;
         synchronized (histories) {
             History tmpHistory = getHistory(tag, partialChanges);
@@ -80,7 +83,7 @@ public class Statistics {
     }
 
     static public void fullReport(Tag tag, int value) {
-        if(!LOG.isDebugEnabled())
+        if(!LOG.isInfoEnabled())
             return;
         synchronized (histories) {
             if (value == 0)
@@ -102,7 +105,7 @@ public class Statistics {
         return true;
     }
     static public void println() {
-        if(!LOG.isDebugEnabled())
+        if(!LOG.isInfoEnabled())
             return;
         synchronized (histories) {
             if (skipReport())
@@ -115,7 +118,7 @@ public class Statistics {
                 tobelogged.append(tag + "Sum " + history.total + " ");
                 tobelogged.append(tag + "Avg " + (float) history.total / history.cnt + " ");
             }
-            LOG.debug(tobelogged);
+            LOG.info(tobelogged);
         }
     }
 }

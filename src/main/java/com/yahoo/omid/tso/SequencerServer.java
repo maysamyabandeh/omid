@@ -47,6 +47,7 @@ import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
 import org.jboss.netty.handler.codec.serialization.ObjectDecoder;
 import org.jboss.netty.handler.codec.serialization.ObjectEncoder;
 import org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor;
+import org.apache.zookeeper.ZooKeeper;
 
 
 /**
@@ -61,8 +62,11 @@ public class SequencerServer extends TSOServer {
      */
     TSOClient[] tsoClients;
 
-    public SequencerServer(TSOServerConfig config, Properties[] soConfs) {
+    ZooKeeper zk;
+
+    public SequencerServer(TSOServerConfig config, Properties[] soConfs, ZooKeeper zk) {
         super(config);
+        this.zk = zk;
         tsoClients = new TSOClient[soConfs.length];
         try {
             for (int i = 0; i < soConfs.length; i++) {
@@ -88,13 +92,16 @@ public class SequencerServer extends TSOServer {
         TSOServerConfig config = TSOServerConfig.parseConfig(args);
         OmidConfiguration omidConf = OmidConfiguration.create();
         omidConf.loadServerConfs(config.getZkServers());
-        new SequencerServer(config, omidConf.getStatusOracleConfs()).run();
+        ZooKeeper zk = new ZooKeeper(config.getZkServers(), 
+                Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
+                null);
+        new SequencerServer(config, omidConf.getStatusOracleConfs(), zk).run();
     }
 
     SequencerHandler sequencerHandler;
     @Override
     protected ChannelHandler newMessageHandler() {
-        sequencerHandler = new SequencerHandler(channelGroup, tsoClients);
+        sequencerHandler = new SequencerHandler(channelGroup, tsoClients, zk);
         return sequencerHandler;
     }
 

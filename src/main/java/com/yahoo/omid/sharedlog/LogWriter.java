@@ -24,7 +24,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
  * Its writes also could be followed
  */
 public class LogWriter implements FollowedPointer {
-    private SharedLog log;
+    final private SharedLog log;
     /**
      * Last index that is written
      */
@@ -35,11 +35,21 @@ public class LogWriter implements FollowedPointer {
      * the content between the pointer and the next pointer is invalid during the write
      */
     private AtomicLong atomicNextGlobalPointer;
+    /**
+     * referece to persister
+     * sometime the writer needs to slow down to its persister speed, if there is any
+     * so it needs to query the persister of its speed
+     */
+    private LogPersister persister = null;
 
     public LogWriter(SharedLog log) {
         this.log = log;
         atomicGlobalPointer = new AtomicLong(0);
         atomicNextGlobalPointer = new AtomicLong(0);
+    }
+
+    public void setPersister(LogPersister persister) {
+        this.persister = persister;
     }
 
     /**
@@ -49,13 +59,15 @@ public class LogWriter implements FollowedPointer {
     throws SharedLogException {
         long globalPointer = atomicGlobalPointer.get();
         long nextGlobalPointer = globalPointer + content.readableBytes();
+        boolean tooFastWriting = false;
+        if (persister != null)
+            tooFastWriting = persister.wouldYouBeLaggedBehind(nextGlobalPointer);
+        if (tooFastWriting)
+            throw new SharedLogException("Too fast writer: no space left!");
         globalPointer++;//write to the next byte
-        //System.out.println("append: globalPointer is " + globalPointer);
-        //System.out.println("append: nextGlobalPointer is " + globalPointer);
         atomicNextGlobalPointer.set(nextGlobalPointer);
         log.writeAt(globalPointer, content);
         atomicGlobalPointer.set(nextGlobalPointer);
-        //System.out.println("append: atomicGlobalPointer is " + atomicGlobalPointer + " but it should be " + nextGlobalPointer);
     }
 
     /**
@@ -71,8 +83,6 @@ public class LogWriter implements FollowedPointer {
             throw new SharedLogException("Follower pointer " + x + " advances the subject's pointer " + globalPointer);
         if (x == globalPointer)
             return null;
-        if (log.isXLaggedBehindY(x, globalPointer))
-            throw new SharedLogLateFollowerException();
         return log.globalToLogRange(x+1, globalPointer);
     }
 

@@ -16,6 +16,8 @@
 
 package com.yahoo.omid.sharedlog;
 
+import com.yahoo.omid.Statistics;
+
 import java.util.concurrent.atomic.AtomicLong;
 import org.jboss.netty.buffer.ChannelBuffer;
 
@@ -48,8 +50,10 @@ public class LogReader {
     public ChannelBuffer tail() 
     throws SharedLogException, SharedLogLateFollowerException {
         SharedLog.LogRange range = subject.followRangeAfter(globalPointer);
-        if (range == null)
+        if (range == null) {
+            Statistics.fullReport(Statistics.Tag.EMPTY_FOR_BROADCAST, 1);
             return null;
+        }
         //System.out.println(range);
         ChannelBuffer buffer = log.read(range);
         lastGlobalPointer = globalPointer;

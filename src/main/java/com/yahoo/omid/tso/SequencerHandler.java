@@ -16,6 +16,8 @@
 
 package com.yahoo.omid.tso;
 
+import com.yahoo.omid.Statistics;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -53,12 +55,16 @@ import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import com.yahoo.omid.tso.persistence.LoggerProtocol;
+import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.LoggerInitCallback;
 import com.yahoo.omid.IsolationLevel;
 import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.concurrent.ScheduledExecutorService;
 import com.yahoo.omid.sharedlog.*;
+import com.yahoo.omid.tso.persistence.StateLogger;
+import com.yahoo.omid.tso.persistence.BookKeeperStateLogger;
+import org.apache.zookeeper.ZooKeeper;
 
 /**
  * ChannelHandler for the TSO Server
@@ -91,28 +97,64 @@ public class SequencerHandler extends SimpleChannelHandler {
      */
     //TSOClient[] tsoClients;
     LogWriter logWriter;
+    LogPersister logPersister;
+    StateLogger logBackend;
 
     /**
      * Constructor
      * @param channelGroup
      */
-    public SequencerHandler(ChannelGroup channelGroup, TSOClient[] tsoClients) {
-        this.broadcasters = Executors.newScheduledThreadPool(tsoClients.length);
+    public SequencerHandler(ChannelGroup channelGroup, TSOClient[] tsoClients, ZooKeeper zk) {
+        this.broadcasters = Executors.newScheduledThreadPool(tsoClients.length + 1 + 1);
+        // + 1 persiter + 1 statistics
         this.channelGroup = channelGroup;
         //this.tsoClients = tsoClients;
         this.sharedLog = new SharedLog();
         this.logWriter = new LogWriter(sharedLog);
+        initLogBackend(zk);
+        this.logPersister = new LogPersister(sharedLog, logWriter);
+        this.logWriter.setPersister(this.logPersister);
+        broadcasters.scheduleAtFixedRate(
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        Statistics.println();
+                    }
+                }, 1, 3000, TimeUnit.MILLISECONDS);
+        broadcasters.schedule(new PersistenceThread(logPersister), 0, TimeUnit.MILLISECONDS);
         for (TSOClient tsoClient: tsoClients) {
-            initReadBuffer(tsoClient, logWriter);
+            initReadBuffer(tsoClient, logPersister);
         }
     }
 
-    void initReadBuffer(TSOClient tsoClient, LogWriter logWriter) {
+    void initLogBackend(ZooKeeper zk) {
+        try {
+            new BookKeeperStateLogger(zk).initialize(new LoggerInitCallback() {
+                public void loggerInitComplete(int rc, StateLogger sl, Object ctx){
+                    if(rc == Code.OK){
+                        if(LOG.isDebugEnabled()){
+                            LOG.debug("Logger is ok.");
+                        }
+                        LOG.info("loggerInitComplete: OK");
+                        logBackend = sl;
+                    } else {
+                        LOG.error("Error when initializing logger: " + LoggerException.getMessage(rc));
+                    }
+                }
+
+            }, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    void initReadBuffer(TSOClient tsoClient, FollowedPointer subject) {
         LogReader logReader;
         synchronized (messageBuffersMap) {
             logReader = messageBuffersMap.get(tsoClient);
             if (logReader == null) {
-                logReader = new LogReader(sharedLog, logWriter);
+                logReader = new LogReader(sharedLog, subject);
                 messageBuffersMap.put(tsoClient, logReader);
                 LOG.warn("init reader for: " + tsoClient);
             } else {
@@ -149,6 +191,60 @@ public class SequencerHandler extends SimpleChannelHandler {
                 ioE.printStackTrace();
             } catch (Exception e) {
                 e.printStackTrace();
+            }
+        }
+    }
+
+    private class PersistenceThread implements Runnable {
+        LogPersister logPersister;
+        public PersistenceThread(LogPersister logPersister) {
+            this.logPersister = logPersister;
+        }
+        @Override
+        public void run() {
+            for (;;) {
+                try {
+                    if (logBackend == null) {
+                        System.out.println("Wait more for the log backend ...");
+                        Thread.sleep(100);
+                        continue;
+                    }
+                    LogPersister.ToBePersistedData toBePersistedData = logPersister.toBePersisted();
+                    if (toBePersistedData == null) {
+                        Thread.yield();
+                        continue;
+                    }
+                    ChannelBuffer tail = toBePersistedData.getData();
+                    byte[] record;
+                    record = new byte[tail.readableBytes()];
+                    tail.readBytes(record);
+                    logBackend.addRecord(record, 
+                            new AddRecordCallback() {
+                                @Override
+                                public void addRecordComplete(int rc, Object ctx) {
+                                    if (rc != Code.OK) {
+                                        LOG.error("Writing to log backend failed: " + LoggerException.getMessage(rc));
+                                        System.exit(1);
+                                        //TODO: handle it properly
+                                    } else {
+                                        LogPersister.ToBePersistedData toBePersistedData = (LogPersister.ToBePersistedData) ctx;
+                                        toBePersistedData.persisted();
+                                    }
+                                }
+                            }, toBePersistedData);
+                    Thread.sleep(1);
+                } catch (SharedLogLateFollowerException lateE) {
+                    //TODO do something
+                    lateE.printStackTrace();
+                } catch (SharedLogException sharedE) {
+                    //TODO do something
+                    sharedE.printStackTrace();
+                //} catch (IOException ioE) {
+                    ////TODO do something
+                    //ioE.printStackTrace();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
             }
         }
     }
