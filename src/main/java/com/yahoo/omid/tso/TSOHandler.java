@@ -339,10 +339,6 @@ public class TSOHandler extends SimpleChannelHandler {
             //point to the related start timestamp in the vector timestamp
             ((MultiCommitRequest)msg).setSoId(sharedState.getId());
         }
-        //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
-        synchronized (sharedState) {
-            sharedState.uncommited.finished(msg.getStartTimestamp());
-        }
         CommitResponse reply = new CommitResponse(msg.getStartTimestamp());
         sortRows(msg.readRows, msg.writtenRows);
         if (msg.prepared) {
@@ -411,6 +407,12 @@ public class TSOHandler extends SimpleChannelHandler {
      */
     private boolean prepareCommit(long startTimestamp, RowKey[] readRows, RowKey[] writtenRows) {
         boolean committed = true;//default
+        //make sure it will not be aborted concurrently by a raise in Tmax on uncommited
+        //if prepareCommit is successful, the transacion shall not be forced to abort
+        //by a raise in Tmax, so finished should be called at this stage
+        synchronized (sharedState) {
+            sharedState.uncommited.finished(startTimestamp);
+        }
         //0. check if it sould abort
         if (startTimestamp < timestampOracle.first()) {
             committed = false;
@@ -486,6 +488,7 @@ public class TSOHandler extends SimpleChannelHandler {
                 toAbort = sharedState.uncommited.raiseLargestDeletedTransaction(newmax);
                 if (!toAbort.isEmpty())
                     LOG.warn("Slow transactions after raising max: " + toAbort);
+                //TODO: toAbort should be added to half-aborted list
                 synchronized (sharedMsgBufLock) {
                     for (Long id : toAbort)
                         queueHalfAbort(id);
