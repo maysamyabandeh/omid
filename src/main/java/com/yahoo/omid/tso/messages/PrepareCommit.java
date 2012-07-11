@@ -35,6 +35,17 @@ public class PrepareCommit implements TSOMessage {
      * Starting timestamp
      */
     public long startTimestamp;
+    /**
+     * Vector start timestamp
+     * It is used only for recovery purposes, when a monitor wants to force a global abort
+     */
+    long[] startTimestamps = null;
+    /**
+     * what is the peer id
+     * -1 means no peer
+     * It is used only for recovery purposes, when a monitor wants to force a global abort
+     */
+    public int peerId = -1;
 
     public PrepareCommit() {
     }
@@ -51,10 +62,11 @@ public class PrepareCommit implements TSOMessage {
         this.readRows = new RowKey[0];
     }
 
-    public PrepareCommit(long startTimestamp, RowKey[] writtenRows, RowKey[] readRows) {
+    public PrepareCommit(long startTimestamp, RowKey[] writtenRows, RowKey[] readRows, long[] startTimestamps) {
         this.startTimestamp = startTimestamp;
         this.writtenRows = writtenRows;
         this.readRows = readRows;
+        this.startTimestamps = startTimestamps;
     }
 
     /**
@@ -62,6 +74,11 @@ public class PrepareCommit implements TSOMessage {
      */
     public RowKey[] writtenRows;
     public RowKey[] readRows;
+
+    /**
+     * This field is temporarily used by the TSOServer and does not need to be persisted
+     */
+    public boolean isAlreadyVisitedByLockMonitor = false;
 
     @Override
     public String toString() {
@@ -83,6 +100,11 @@ public class PrepareCommit implements TSOMessage {
         for (int i = 0; i < size; i++) {
             readRows[i] = RowKey.readObject(aInputStream);
         }
+        peerId = aInputStream.readInt();
+        size = aInputStream.readInt();
+        startTimestamps = new long[size];
+        for (int i = 0; i < size; i++)
+            startTimestamps[i] = aInputStream.readLong();
     }
 
     @Override
@@ -100,6 +122,10 @@ public class PrepareCommit implements TSOMessage {
         for (RowKey r: readRows) {
             r.writeObject(aOutputStream);
         }
+        aOutputStream.writeInt(peerId);
+        aOutputStream.writeInt(startTimestamps.length);
+        for (int i = 0; i < startTimestamps.length; i++)
+            aOutputStream.writeLong(startTimestamps[i]);
     }
 }
 

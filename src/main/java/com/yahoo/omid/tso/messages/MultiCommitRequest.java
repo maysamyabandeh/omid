@@ -57,6 +57,7 @@ public class MultiCommitRequest extends CommitRequest {
 
     public MultiCommitRequest() {
         globalTxn = true;
+        prepared = true;
     }
 
     public MultiCommitRequest(long[] startTimestamps) {
@@ -78,6 +79,14 @@ public class MultiCommitRequest extends CommitRequest {
         this.startTimestamps = startTimestamps;
         this.writtenRows = writtenRows;
         this.readRows = readRows;
+    }
+
+    /**
+     * create an object based on a previous PrepareCommit
+     */
+    public MultiCommitRequest(PrepareCommit prep) {
+        this(prep.startTimestamps);
+        peerId = prep.peerId;
     }
 
     @Override

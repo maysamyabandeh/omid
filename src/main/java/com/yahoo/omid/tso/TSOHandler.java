@@ -48,6 +48,7 @@ import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
+import java.util.Properties;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.Peerable;
@@ -74,6 +75,7 @@ import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import com.yahoo.omid.tso.persistence.LoggerProtocol;
 import com.yahoo.omid.IsolationLevel;
+import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
 import java.util.HashSet;
 
@@ -126,18 +128,28 @@ public class TSOHandler extends SimpleChannelHandler {
     private TSOState sharedState;
 
     private FlushThread flushThread;
+    private LockMonitor lockMonitor;
     private ScheduledExecutorService executor;
     private ScheduledFuture<?> flushFuture;
+
+    /**
+     * The interface to the sequencer
+     * It should be created after the sequencer is up
+     */
+    TSOClient sequencerClient = null;
+    Properties sequencerConf;
 
     /**
      * Constructor
      * @param channelGroup
      */
-    public TSOHandler(ChannelGroup channelGroup, TSOState state) {
+    public TSOHandler(ChannelGroup channelGroup, TSOState state, Properties sequencerConf) {
         this.channelGroup = channelGroup;
         this.timestampOracle = state.getSO();
         this.sharedState = state;
         this.flushThread = new FlushThread();
+        this.lockMonitor = new LockMonitor();
+        this.sequencerConf = sequencerConf;
         this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -148,6 +160,7 @@ public class TSOHandler extends SimpleChannelHandler {
             }
         });
         this.flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
+        Executors.newScheduledThreadPool(1).scheduleAtFixedRate(lockMonitor, 1, TSOState.MONITOR_INTERVAL, TimeUnit.SECONDS);
     }
 
     /**
@@ -198,7 +211,18 @@ public class TSOHandler extends SimpleChannelHandler {
         LOG.error("Unknown message received at TSO: " + msg + " to " + channel);
     }
 
+    /**
+     * Handling an abort request
+     * In the case of 2PC txns, the abort must be requested through the sequencer
+     * via a MultiCommitRequest message
+     * This is important to handle probable concurrent abort and commit requests 
+     * for the same 2PC txn
+     */
     public void handle(AbortRequest msg, Channel channel) {
+        //TODO: Uncommited could mess it up if we call finished for a very old txn
+        //synchronized (sharedState) {
+            //sharedState.uncommited.finished(msg.startTimestamp);
+        //}
         synchronized (sharedState) {
             DataOutputStream toWAL  = sharedState.toWAL;
             try {
@@ -344,10 +368,17 @@ public class TSOHandler extends SimpleChannelHandler {
         if (msg.prepared) {
             //System.out.println("txnHistory.remove " + msg.getStartTimestamp());
             PrepareCommit prep = txnHistory.remove(msg.getStartTimestamp());
-            assert(prep != null);
-            if (prep == null)
-                LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory.size());
+            if (prep == null) {
+                /**
+                * prep could be null if the second phase of 2PC is already processed
+                * receives redudant requests for the 2nd phase could be due to the 
+                * concurrent activitiy of a watcher that suggests aborting a slow txn
+                */
+                LOG.warn("CommitRequest for non-pending transaction! " +
+                        msg.getStartTimestamp() + "|" + msg + "|" + txnHistory.size());
                 //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory);
+                return;
+            }
             msg.readRows = prep.readRows;
             msg.writtenRows = prep.writtenRows;
             reply.committed = msg.successfulPrepared;
@@ -370,7 +401,7 @@ public class TSOHandler extends SimpleChannelHandler {
         LockOp lockOp = LockOp.unlock;
         if (msg.prepared) {
             boolean wasFailed = sharedState.failedPrepared.remove(msg.getStartTimestamp());//just in case it was failed
-            lockOp = wasFailed ? LockOp.unlock : LockOp.disownIt;//if it was failed, it was not owened by us
+            lockOp = wasFailed ? LockOp.unlock : LockOp.disownIt;//if it was failed, it was not owned by us
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.getStartTimestamp());
         if (reply.committed) {
@@ -732,6 +763,54 @@ public class TSOHandler extends SimpleChannelHandler {
             if (flushFuture.cancel(false)) {
                 flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
             }
+        }
+    }
+
+    /**
+     * This class monitors the unreleased locks and 
+     * do proper actions accordingly
+     */
+    private class LockMonitor implements Runnable {
+        @Override
+        public void run() {
+            if (finish) {
+                return;
+            }
+            try {
+                Iterator it = txnHistory.entrySet().iterator();
+                long time = System.currentTimeMillis();
+                while (it.hasNext()) {
+                    Map.Entry pairs = (Map.Entry)it.next();
+                    PrepareCommit prep = ((PrepareCommit)pairs.getValue());
+                    if (prep.isAlreadyVisitedByLockMonitor)
+                        suggestAbort(prep);
+                    else prep.isAlreadyVisitedByLockMonitor = true;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Suggest aborting a transaction
+     */
+    void suggestAbort(PrepareCommit prep) {
+        if (sequencerClient == null) {
+            try {
+                sequencerClient = new TSOClient(sequencerConf);
+            } catch (IOException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
+        }
+        MultiCommitRequest mcr = new MultiCommitRequest(prep);
+        mcr.successfulPrepared = false;
+        LOG.warn("Suggesting abort: " + mcr + " to " + sequencerClient);
+        try {
+            sequencerClient.forward(mcr);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 

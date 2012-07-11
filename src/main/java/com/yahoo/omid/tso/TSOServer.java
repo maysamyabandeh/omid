@@ -20,7 +20,10 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import com.yahoo.omid.client.TSOClient;
+import java.util.Properties;
 
+import java.io.IOException;
 import java.util.concurrent.Executor;
 
 import com.yahoo.omid.OmidConfiguration;
@@ -65,12 +68,20 @@ public class TSOServer implements Runnable {
         this.lock = new Object();
     }
     
+    /**
+     * The conf for creating an interface to the sequencer
+     */
+    Properties sequencerConf = null;
     public TSOServer(TSOServerConfig config) {
         super();
         this.config = config;
-        
         this.finish = false;
         this.lock = new Object();
+    }
+    
+    public TSOServer(TSOServerConfig config, Properties sequencerConf) {
+        this(config);
+        this.sequencerConf = sequencerConf;
     }
     
     public TSOState getState() {
@@ -87,12 +98,14 @@ public class TSOServer implements Runnable {
      */
     public static void main(String[] args) throws Exception {
         TSOServerConfig config = TSOServerConfig.parseConfig(args);
+        OmidConfiguration omidConf = OmidConfiguration.create();
+        omidConf.loadServerConfs(config.getZkServers());
 
-        new TSOServer(config).run();
+        new TSOServer(config, omidConf.getSequencerConf()).run();
     }
 
     protected ChannelHandler newMessageHandler() {
-        return new TSOHandler(channelGroup, state);
+        return new TSOHandler(channelGroup, state, sequencerConf);
     }
 
     protected ChannelPipelineFactory newPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {

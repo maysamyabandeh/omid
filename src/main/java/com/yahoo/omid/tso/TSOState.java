@@ -65,6 +65,7 @@ public class TSOState {
       }
    };
 
+   static public int MONITOR_INTERVAL = 5;//in seconds
    static public int FLUSH_TIMEOUT = 5;
    static {
       try {

@@ -260,12 +260,15 @@ while (curMessage > 0) {
         }
         if (!readOnly) {
             //3. send prepares
+            long[] vts = new long[tsoClients.length];
+            for (int i = 0; i < tsoClients.length; i++)
+                vts[i] = tscbs[i].getPong().timestamp;
             PingPongCallback<PrepareResponse>[] prcbs;
             prcbs = new PingPongCallback[tsoClients.length];
             for (int i = 0; i < tsoClients.length; i++) {
                 prcbs[i] = new PingPongCallback<PrepareResponse>();
                 long ts = tscbs[i].getPong().timestamp;
-                PrepareCommit pcmsg = new PrepareCommit(ts, rw[i].writtenRows, rw[i].readRows);
+                PrepareCommit pcmsg = new PrepareCommit(ts, rw[i].writtenRows, rw[i].readRows, vts);
                 tsoClients[i].prepareCommit(ts, pcmsg, prcbs[i]);
             }
             boolean success = true;
@@ -273,16 +276,17 @@ while (curMessage > 0) {
                 prcbs[i].await();
                 success = success && prcbs[i].getPong().committed;
             }
+            //3.x sometimes ignore commit
+            float faultChance = 0.0002f;
+            boolean faulty = rnd.nextFloat() < faultChance;
+            if (faulty)
+                continue;
             //4. get a vector commit timestamp
             PingPongCallback<CommitResponse>[] tccbs;
             tccbs = new PingPongCallback[tsoClients.length];
             for (int i = 0; i < tsoClients.length; i++)
                 tccbs[i] = tsoClients[i].registerCommitCallback(tscbs[i].getPong().timestamp);
-            long[] vts = new long[tsoClients.length];
-            for (int i = 0; i < tsoClients.length; i++)
-                vts[i] = tscbs[i].getPong().timestamp;
             MultiCommitRequest mcr = new MultiCommitRequest(vts);
-            mcr.prepared = true;
             mcr.successfulPrepared = success;
             getNewIndirectCommitTimestamp(mcr);
             failed = false;

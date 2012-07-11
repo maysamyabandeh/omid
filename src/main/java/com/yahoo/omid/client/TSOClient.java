@@ -387,12 +387,12 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
     }
 
     /**
-     * Forward a new timestamp request
+     * Forward a message
      * do not wait for the respond
      */
-    //public void forward(TSOMessage msg) throws IOException {
-        //withConnection(new MessageOp<TSOMessage>(msg));
-    //}
+    public void forward(TSOMessage msg) throws IOException {
+        withConnection(new MessageOp<TSOMessage>(msg));
+    }
     public ChannelFuture forward(ChannelBuffer buf) throws IOException {
         return withConnection(new BufferOp(buf));
     }
@@ -492,6 +492,7 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
         if (msg.writtenRows.length == 0) {
             msg.readRows = EMPTY_ROWS;
         }
+        msg.peerId = myId;
         synchronized(prepareCallbacks) {
             if (prepareCallbacks.containsKey(transactionId)) {
                 throw new IOException("Already preparing transaction " + transactionId);
@@ -630,7 +631,7 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
                 cb = commitCallbacks.remove(r.startTimestamp);
             }
             if (cb == null) {
-                LOG.error("Received a commit response for a nonexisting commit");
+                LOG.error("Received a commit response for a not-requested commit " + r);
                 return;
             }
             if (r.isFailed()) {
@@ -818,7 +819,7 @@ public class TSOClient extends SimpleChannelHandler implements Comparable<TSOCli
 
     @Override
     public String toString() {
-        return channel.toString();
+        return channel == null ? "null" : channel.toString();
     }
 
     protected void processMessage(TSOMessage msg) {
