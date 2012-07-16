@@ -48,7 +48,6 @@ import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
-import java.util.Properties;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.Peerable;
@@ -106,17 +105,6 @@ public class TSOHandler extends SimpleChannelHandler {
     private ChannelGroup channelGroup = null;
     private static ChannelGroup clientChannels = new DefaultChannelGroup("clients");
 
-    private Map<Channel, ReadingBuffer> messageBuffersMap = new HashMap<Channel, ReadingBuffer>();
-    private Map<Integer, Channel> peerToChannelMap = new HashMap<Integer, Channel>();
-
-    /**
-     * Mainatains a mapping between the transaction and its PrepareCommit
-     * which contains the rows read and written by the transaction
-     */
-    //TODO: create N maps and attach them to channels. This avoids concurrency inefficiency
-    private ConcurrentMap<Long, PrepareCommit> txnHistory = new ConcurrentHashMap(10000);
-    //TODO: estimate a proper capacity
-
     /**
      * Timestamp Oracle
      */
@@ -128,28 +116,19 @@ public class TSOHandler extends SimpleChannelHandler {
     private TSOState sharedState;
 
     private FlushThread flushThread;
-    private LockMonitor lockMonitor;
     private ScheduledExecutorService executor;
+    //TODO: what if we have multiple instance of TSOHandler?
     private ScheduledFuture<?> flushFuture;
-
-    /**
-     * The interface to the sequencer
-     * It should be created after the sequencer is up
-     */
-    TSOClient sequencerClient = null;
-    Properties sequencerConf;
 
     /**
      * Constructor
      * @param channelGroup
      */
-    public TSOHandler(ChannelGroup channelGroup, TSOState state, Properties sequencerConf) {
+    public TSOHandler(ChannelGroup channelGroup, TSOState state) {
         this.channelGroup = channelGroup;
         this.timestampOracle = state.getSO();
         this.sharedState = state;
         this.flushThread = new FlushThread();
-        this.lockMonitor = new LockMonitor();
-        this.sequencerConf = sequencerConf;
         this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -160,7 +139,6 @@ public class TSOHandler extends SimpleChannelHandler {
             }
         });
         this.flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
-        Executors.newScheduledThreadPool(1).scheduleAtFixedRate(lockMonitor, 1, TSOState.MONITOR_INTERVAL, TimeUnit.SECONDS);
     }
 
     /**
@@ -235,7 +213,7 @@ public class TSOHandler extends SimpleChannelHandler {
             }
             abortCount++;
             sharedState.processAbort(msg.startTimestamp);
-            synchronized (sharedMsgBufLock) {
+            synchronized (sharedState.sharedMsgBufLock) {
                 queueHalfAbort(msg.startTimestamp);
             }
         }
@@ -246,22 +224,22 @@ public class TSOHandler extends SimpleChannelHandler {
      */
     public void handle(PeerIdAnnoncement msg, Channel channel) {
         int peerId = msg.getPeerId();
-        Channel currChannel = peerToChannelMap.get(peerId);
+        Channel currChannel = sharedState.peerToChannelMap.get(peerId);
         if (currChannel != null)
             LOG.error("Reseting the channel for peer " + peerId);
         System.out.println("set channel for " + peerId);
-        peerToChannelMap.put(peerId, channel);
+        sharedState.peerToChannelMap.put(peerId, channel);
     }
 
     public Channel getPeerChannel(Peerable msg) {
         Channel channel = null;
         //see if the peer of the communication is not the sender
         if (msg.peerIsSpecified()) {
-            channel = peerToChannelMap.get(msg.getPeerId());
+            channel = sharedState.peerToChannelMap.get(msg.getPeerId());
             if (channel == null) {
                 //TODO: handle it properly
                 LOG.error("Unkonwn peer " + msg.getPeerId() + " msg: " + msg);
-                LOG.error(peerToChannelMap);
+                LOG.error(sharedState.peerToChannelMap);
             }
         }
         return channel;
@@ -298,11 +276,11 @@ public class TSOHandler extends SimpleChannelHandler {
         }
 
         ReadingBuffer buffer;
-        synchronized (messageBuffersMap) {
-            buffer = messageBuffersMap.get(channel);
+        synchronized (sharedState.messageBuffersMap) {
+            buffer = sharedState.messageBuffersMap.get(channel);
             if (buffer == null) {
                 synchronized (sharedState) {
-                    synchronized (sharedMsgBufLock) {
+                    synchronized (sharedState.sharedMsgBufLock) {
                         channel.write(new CommittedTransactionReport(sharedState.latestStartTimestamp, sharedState.latestCommitTimestamp));
                         synchronized (sharedState.hashmap) {
                             for (Long halfAborted : sharedState.hashmap.halfAborted) {
@@ -317,22 +295,20 @@ public class TSOHandler extends SimpleChannelHandler {
                         channel.write(new FullAbortReport(sharedState.latestFullAbortTimestamp));
                         channel.write(new LargestDeletedTimestampReport(sharedState.largestDeletedTimestamp));
                         buffer = sharedState.sharedMessageBuffer.new ReadingBuffer(channel);
-                        messageBuffersMap.put(channel, buffer);
+                        sharedState.messageBuffersMap.put(channel, buffer);
                         channelGroup.add(channel);
                         clientChannels.add(channel);
-                        LOG.warn("Channel connected: " + messageBuffersMap.size());
+                        LOG.warn("Channel connected: " + sharedState.messageBuffersMap.size());
                     }
                 }
             }
         }
-        synchronized (sharedMsgBufLock) {
+        synchronized (sharedState.sharedMsgBufLock) {
             sharedState.sharedMessageBuffer.writeTimestamp(response);
             buffer.flush();
             sharedState.sharedMessageBuffer.rollBackTimestamp();
         }
     }
-
-    ChannelBuffer cb = ChannelBuffers.buffer(10);
 
     private boolean finish;
 
@@ -349,8 +325,8 @@ public class TSOHandler extends SimpleChannelHandler {
             lockOp = LockOp.unlock;//do not change the current owner if there is any
         }
         setLocks(msg.readRows, msg.writtenRows, lockOp, msg.startTimestamp);
-        PrepareCommit prevValue = txnHistory.put(msg.startTimestamp, msg);
-        //System.out.println("txnHistory.put " + msg.startTimestamp + " " + prevValue);
+        PrepareCommit prevValue = sharedState.prepareCommitHistory.put(msg.startTimestamp, msg);
+        //System.out.println("sharedState.prepareCommitHistory.put " + msg.startTimestamp + " " + prevValue);
         assert(prevValue == null);
         channel.write(reply);
     }
@@ -366,8 +342,8 @@ public class TSOHandler extends SimpleChannelHandler {
         CommitResponse reply = new CommitResponse(msg.getStartTimestamp());
         sortRows(msg.readRows, msg.writtenRows);
         if (msg.prepared) {
-            //System.out.println("txnHistory.remove " + msg.getStartTimestamp());
-            PrepareCommit prep = txnHistory.remove(msg.getStartTimestamp());
+            //System.out.println("sharedState.prepareCommitHistory.remove " + msg.getStartTimestamp());
+            PrepareCommit prep = sharedState.prepareCommitHistory.remove(msg.getStartTimestamp());
             if (prep == null) {
                 /**
                 * prep could be null if the second phase of 2PC is already processed
@@ -375,8 +351,8 @@ public class TSOHandler extends SimpleChannelHandler {
                 * concurrent activitiy of a watcher that suggests aborting a slow txn
                 */
                 LOG.warn("CommitRequest for non-pending transaction! " +
-                        msg.getStartTimestamp() + "|" + msg + "|" + txnHistory.size());
-                //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + txnHistory);
+                        msg.getStartTimestamp() + "|" + msg + "|" + sharedState.prepareCommitHistory.size());
+                //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + prepareCommitHistory);
                 return;
             }
             msg.readRows = prep.readRows;
@@ -508,7 +484,7 @@ public class TSOHandler extends SimpleChannelHandler {
                 newmax = sharedState.hashmap.setCommitted(reply.commitTimestamp, reply.commitTimestamp, newmax);
             }
             //d) report the commit to the immdediate next txn
-            synchronized (sharedMsgBufLock) {
+            synchronized (sharedState.sharedMsgBufLock) {
                 queueCommit(msg.getStartTimestamp(), reply.commitTimestamp);
             }
             //e) report eldest if it is changed by this commit
@@ -520,7 +496,7 @@ public class TSOHandler extends SimpleChannelHandler {
                 if (!toAbort.isEmpty())
                     LOG.warn("Slow transactions after raising max: " + toAbort);
                 //TODO: toAbort should be added to half-aborted list
-                synchronized (sharedMsgBufLock) {
+                synchronized (sharedState.sharedMsgBufLock) {
                     for (Long id : toAbort)
                         queueHalfAbort(id);
                     queueLargestIncrease(sharedState.largestDeletedTimestamp);
@@ -545,7 +521,7 @@ public class TSOHandler extends SimpleChannelHandler {
                 Set<Elder> eldersToBeFailed = sharedState.elders.raiseLargestDeletedTransaction(newmax);
                 if (eldersToBeFailed != null && !eldersToBeFailed.isEmpty()) {
                     LOG.warn("failed elder transactions after raising max: " + eldersToBeFailed + " from " + oldmax + " to " + newmax);
-                    synchronized (sharedMsgBufLock) {
+                    synchronized (sharedState.sharedMsgBufLock) {
                         //report failedElders to the clients
                         for (Elder elder : eldersToBeFailed)
                             queueFailedElder(elder.getId(), elder.getCommitTimestamp());
@@ -567,7 +543,7 @@ public class TSOHandler extends SimpleChannelHandler {
         synchronized (sharedState.hashmap) {
             sharedState.processAbort(msg.getStartTimestamp());
         }
-        synchronized (sharedMsgBufLock) {
+        synchronized (sharedState.sharedMsgBufLock) {
             queueHalfAbort(msg.getStartTimestamp());
         }
     }
@@ -636,7 +612,6 @@ public class TSOHandler extends SimpleChannelHandler {
             if (sharedState.baos.size() >= TSOState.BATCH_SIZE)
                 flushTheBatch();
         }
-
     }
 
     boolean checkForConflictsIn(RowKey[] rows, long startTimestamp, boolean committed, boolean isAlreadyLocked) {
@@ -684,7 +659,7 @@ public class TSOHandler extends SimpleChannelHandler {
             sharedState.elders.addElder(msg.getStartTimestamp(), reply.commitTimestamp, rowsWithWriteWriteConflict);
             if (sharedState.elders.isEldestChangedSinceLastProbe()) {
                 LOG.warn("eldest is changed: " + msg.getStartTimestamp());
-                synchronized (sharedMsgBufLock) {
+                synchronized (sharedState.sharedMsgBufLock) {
                     queueEldestUpdate(sharedState.elders.getEldest());
                 }
                 synchronized (sharedState.toWAL) {
@@ -747,12 +722,12 @@ public class TSOHandler extends SimpleChannelHandler {
                     if (rc != Code.OK) {
                         LOG.warn("Write failed: " + LoggerException.getMessage(rc));
                     } else {
-                        synchronized (callbackLock) {
+                        synchronized (sharedState.callbackLock) {
                             @SuppressWarnings("unchecked")
                             ArrayList<ChannelandMessage> theBatch = (ArrayList<ChannelandMessage>) obj;
-            for (ChannelandMessage cam : theBatch) {
-                cam.channel.write(cam.msg);
-            }
+                            for (ChannelandMessage cam : theBatch) {
+                                cam.channel.write(cam.msg);
+                            }
                         }
                     }
                 }
@@ -763,54 +738,6 @@ public class TSOHandler extends SimpleChannelHandler {
             if (flushFuture.cancel(false)) {
                 flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
             }
-        }
-    }
-
-    /**
-     * This class monitors the unreleased locks and 
-     * do proper actions accordingly
-     */
-    private class LockMonitor implements Runnable {
-        @Override
-        public void run() {
-            if (finish) {
-                return;
-            }
-            try {
-                Iterator it = txnHistory.entrySet().iterator();
-                long time = System.currentTimeMillis();
-                while (it.hasNext()) {
-                    Map.Entry pairs = (Map.Entry)it.next();
-                    PrepareCommit prep = ((PrepareCommit)pairs.getValue());
-                    if (prep.isAlreadyVisitedByLockMonitor)
-                        suggestAbort(prep);
-                    else prep.isAlreadyVisitedByLockMonitor = true;
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    /**
-     * Suggest aborting a transaction
-     */
-    void suggestAbort(PrepareCommit prep) {
-        if (sequencerClient == null) {
-            try {
-                sequencerClient = new TSOClient(sequencerConf);
-            } catch (IOException e) {
-                e.printStackTrace();
-                System.exit(1);
-            }
-        }
-        MultiCommitRequest mcr = new MultiCommitRequest(prep);
-        mcr.successfulPrepared = false;
-        LOG.warn("Suggesting abort: " + mcr + " to " + sequencerClient);
-        try {
-            sequencerClient.forward(mcr);
-        } catch (IOException e) {
-            e.printStackTrace();
         }
     }
 
@@ -873,13 +800,13 @@ public class TSOHandler extends SimpleChannelHandler {
             if (itWasFailed) {
                 LOG.warn("a failed elder is reincarnated: " + msg.startTimestamp);
                 //tell the clients that the failed elder is reincarnated
-                synchronized (sharedMsgBufLock) {
+                synchronized (sharedState.sharedMsgBufLock) {
                     queueReincarnatdElder(msg.startTimestamp);
                 }
             }
             if (sharedState.elders.isEldestChangedSinceLastProbe()) {
                 LOG.warn("eldest is changed: " + msg.startTimestamp);
-                synchronized (sharedMsgBufLock) {
+                synchronized (sharedState.sharedMsgBufLock) {
                     queueEldestUpdate(sharedState.elders.getEldest());
                 }
             }
@@ -912,7 +839,7 @@ public class TSOHandler extends SimpleChannelHandler {
             }
             sharedState.processFullAbort(msg.startTimestamp);
         }
-        synchronized (sharedMsgBufLock) {
+        synchronized (sharedState.sharedMsgBufLock) {
             queueFullAbort(msg.startTimestamp);
         }
     }
@@ -928,9 +855,6 @@ public class TSOHandler extends SimpleChannelHandler {
             msg = m;
         }
     }
-
-    private Object sharedMsgBufLock = new Object();
-    private Object callbackLock = new Object();
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {

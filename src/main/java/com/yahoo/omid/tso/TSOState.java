@@ -32,6 +32,20 @@ import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import java.util.HashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
+import org.jboss.netty.channel.Channel;
+import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
+import com.yahoo.omid.tso.messages.PrepareCommit;
+import com.yahoo.omid.client.TSOClient;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.Iterator;
+import java.util.Properties;
+import java.io.IOException;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 
 /**
  * The wrapper for different states of TSO
@@ -41,6 +55,26 @@ import org.apache.commons.logging.LogFactory;
 public class TSOState {
     private static final Log LOG = LogFactory.getLog(TSOState.class);
     
+    /**
+     * The mapping between the client channels and their correspondign pointer on
+     * the shared message buffer
+     */
+    public Map<Channel, ReadingBuffer> messageBuffersMap = new HashMap<Channel, ReadingBuffer>();
+
+    /**
+     * The mapping between client Ids to their corresponding channel
+     */
+    public Map<Integer, Channel> peerToChannelMap = new ConcurrentHashMap<Integer, Channel>();
+
+    /**
+     * Mainatains a mapping between the transaction and its PrepareCommit
+     * which contains the rows read and written by the transaction
+     */
+    //TODO: how about creating N maps and attach them to channels. This avoids concurrency inefficiency
+    public ConcurrentMap<Long, PrepareCommit> prepareCommitHistory = new ConcurrentHashMap(10000);
+    //TODO: estimate a proper capacity
+
+
     
    /**
     * The maximum entries kept in TSO
@@ -220,6 +254,7 @@ public class TSOState {
        this.uncommited = new Uncommited(largestDeletedTimestamp);
        this.elders = new Elders();
        this.logger = logger;
+       startsLockMonitor();
    }
    
    public TSOState(TimestampOracle timestampOracle) {
@@ -228,6 +263,71 @@ public class TSOState {
        this.uncommited = new Uncommited(largestDeletedTimestamp);
        this.elders = new Elders();
        this.logger = null;
+       startsLockMonitor();
     }
+
+    /**
+     * The interface to the sequencer
+     * It should be created after the sequencer is up
+     */
+    TSOClient sequencerClient = null;
+
+    /**
+     * The locks used to synchronize access to the corresponding objects
+     */
+    Object sharedMsgBufLock = new Object();
+    Object callbackLock = new Object();
+
+    void startsLockMonitor() {
+        LockMonitor lockMonitor = new LockMonitor();
+        Executors.newScheduledThreadPool(1).scheduleAtFixedRate(lockMonitor, MONITOR_INTERVAL, TSOState.MONITOR_INTERVAL, TimeUnit.SECONDS);
+    }
+
+    void initSequencerClient(Properties sequencerConf) {
+        try {
+            sequencerClient = new TSOClient(sequencerConf);
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    /**
+     * This class monitors the unreleased locks and 
+     * do proper actions accordingly
+     */
+    private class LockMonitor implements Runnable {
+        @Override
+        public void run() {
+            try {
+                Iterator it = prepareCommitHistory.entrySet().iterator();
+                long time = System.currentTimeMillis();
+                while (it.hasNext()) {
+                    Map.Entry pairs = (Map.Entry)it.next();
+                    PrepareCommit prep = ((PrepareCommit)pairs.getValue());
+                    if (prep.isAlreadyVisitedByLockMonitor)
+                        suggestAbort(prep);
+                    else prep.isAlreadyVisitedByLockMonitor = true;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Suggest aborting a transaction
+     */
+    void suggestAbort(PrepareCommit prep) {
+        MultiCommitRequest mcr = new MultiCommitRequest(prep);
+        mcr.successfulPrepared = false;
+        LOG.warn("Suggesting abort: " + mcr + " to " + sequencerClient);
+        try {
+            sequencerClient.forward(mcr);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
 }
 
