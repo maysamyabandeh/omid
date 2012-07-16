@@ -50,14 +50,13 @@ import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
-import com.yahoo.omid.tso.messages.Peerable;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import com.yahoo.omid.tso.persistence.LoggerProtocol;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.LoggerInitCallback;
 import com.yahoo.omid.IsolationLevel;
-import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.concurrent.ScheduledExecutorService;
@@ -90,12 +89,8 @@ public class SequencerHandler extends SimpleChannelHandler {
      */
     private ChannelGroup channelGroup = null;
 
-    private Map<TSOClient, LogReader> messageBuffersMap = new HashMap<TSOClient, LogReader>();
+    private Map<Channel, LogReader> channelToReaderMap = new HashMap<Channel, LogReader>();
 
-    /**
-     * The interface to the tsos
-     */
-    //TSOClient[] tsoClients;
     LogWriter logWriter;
     LogPersister logPersister;
     StateLogger logBackend;
@@ -104,8 +99,8 @@ public class SequencerHandler extends SimpleChannelHandler {
      * Constructor
      * @param channelGroup
      */
-    public SequencerHandler(ChannelGroup channelGroup, TSOClient[] tsoClients, ZooKeeper zk) {
-        this.broadcasters = Executors.newScheduledThreadPool(tsoClients.length + 1 + 1);
+    public SequencerHandler(ChannelGroup channelGroup, ZooKeeper zk, final int numberOfSOs) {
+        this.broadcasters = Executors.newScheduledThreadPool(numberOfSOs + 1 + 1);
         // + 1 persiter + 1 statistics
         this.channelGroup = channelGroup;
         //this.tsoClients = tsoClients;
@@ -122,9 +117,6 @@ public class SequencerHandler extends SimpleChannelHandler {
                     }
                 }, 1, 3000, TimeUnit.MILLISECONDS);
         broadcasters.schedule(new PersistenceThread(logPersister), 0, TimeUnit.MILLISECONDS);
-        for (TSOClient tsoClient: tsoClients) {
-            initReadBuffer(tsoClient, logPersister);
-        }
     }
 
     void initLogBackend(ZooKeeper zk) {
@@ -135,7 +127,7 @@ public class SequencerHandler extends SimpleChannelHandler {
                         if(LOG.isDebugEnabled()){
                             LOG.debug("Logger is ok.");
                         }
-                        LOG.info("loggerInitComplete: OK");
+                        LOG.warn("backend loggerInitComplete: OK");
                         logBackend = sl;
                     } else {
                         LOG.error("Error when initializing logger: " + LoggerException.getMessage(rc));
@@ -149,49 +141,63 @@ public class SequencerHandler extends SimpleChannelHandler {
         }
     }
 
-    void initReadBuffer(TSOClient tsoClient, FollowedPointer subject) {
+    void initReader(Channel channel, FollowedPointer subject) {
         LogReader logReader;
-        synchronized (messageBuffersMap) {
-            logReader = messageBuffersMap.get(tsoClient);
+        synchronized (channelToReaderMap) {
+            logReader = channelToReaderMap.get(channel);
             if (logReader == null) {
                 logReader = new LogReader(sharedLog, subject);
-                messageBuffersMap.put(tsoClient, logReader);
-                LOG.warn("init reader for: " + tsoClient);
+                channelToReaderMap.put(channel, logReader);
+                LOG.warn("init reader for: " + channel);
             } else {
-                LOG.error("reader already mapped to the tso! " + tsoClient);
+                LOG.error("reader already mapped to the tso! " + channel);
             }
         }
-        broadcasters.scheduleAtFixedRate(new BroadcastThread(tsoClient, logReader), 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
+        BroadcastThread broadcastThread = new BroadcastThread(channel, logReader);
+        final ScheduledFuture<?> schedulerControler = broadcasters.scheduleAtFixedRate(broadcastThread, 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
+        broadcastThread.setControler(schedulerControler);
     }
 
     private class BroadcastThread implements Runnable {
-        TSOClient tsoClient;
+        Channel channel;
         LogReader logReader;
-        public BroadcastThread(TSOClient tsoClient, LogReader logReader) {
-            this.tsoClient = tsoClient;
+        ScheduledFuture<?> schedulerControler;
+        public BroadcastThread(Channel channel, LogReader logReader) {
+            this.channel = channel;
             this.logReader = logReader;
+        }
+        public void setControler(ScheduledFuture<?> schedulerControler) {
+            this.schedulerControler = schedulerControler;
         }
         @Override
         public void run() {
             try {
+                if (!channel.isConnected()) {
+                    stopBroadcastingTo(channel);
+                    return;
+                }
                 ChannelBuffer tail = logReader.tail();
                 if (tail == null)
                     return;
                 TSOSharedMessageBuffer._flushes++;
                 TSOSharedMessageBuffer._flSize += tail.readableBytes();
-                tsoClient.forward(tail);
+                channel.write(tail);
             } catch (SharedLogLateFollowerException lateE) {
                 //TODO do something
                 lateE.printStackTrace();
             } catch (SharedLogException sharedE) {
                 //TODO do something
                 sharedE.printStackTrace();
-            } catch (IOException ioE) {
-                //TODO do something
-                ioE.printStackTrace();
             } catch (Exception e) {
                 e.printStackTrace();
+                stopBroadcastingTo(channel);
             }
+        }
+
+        void stopBroadcastingTo(Channel channel) {
+            LOG.error("Stop broadcasting to channel: " + channel);
+            if (schedulerControler != null)
+                schedulerControler.cancel(false);
         }
     }
 
@@ -263,11 +269,17 @@ public class SequencerHandler extends SimpleChannelHandler {
 
     /**
      * Handle receieved messages
+     * This handle could be called both by the client new messgeas to be broadcasted
+     * and by TSOServers to be registered for broadcasts
      */
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
-        multicast((ChannelBuffer)msg);
+        if (msg instanceof PeerIdAnnoncement) {//coming from TSO to register
+            //TODO: use a proper message for registering for the broadcast channel
+            initReader(ctx.getChannel(), logPersister);
+        } else
+            multicast((ChannelBuffer)msg);
     }
 
     long writeCnt = 0;
@@ -305,7 +317,7 @@ public class SequencerHandler extends SimpleChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e) {
-        LOG.warn("TSOHandler: Unexpected exception from downstream.", e.getCause());
+        LOG.warn("SequencerHandler: Unexpected exception from downstream.", e.getCause());
         e.getCause().printStackTrace();
         Channels.close(e.getChannel());
     }

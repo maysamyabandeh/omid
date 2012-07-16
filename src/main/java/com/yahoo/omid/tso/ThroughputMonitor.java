@@ -157,7 +157,7 @@ public class ThroughputMonitor extends Thread {
                     (newWrites - oldWrites),
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesReceivedPerSecond() / (double) (1024 * 1024) : 0,
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesSentPerSecond() / (double) (1024 * 1024) : 0,
-                    state.largestDeletedTimestamp
+                    (state == null) ? 0 : state.largestDeletedTimestamp
                     //newtotalowned, newtotaldisowned
                     )
               );

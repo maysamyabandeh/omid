@@ -78,6 +78,7 @@ import com.yahoo.omid.tso.serialization.TSODecoder;
 import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.Statistics;
 import java.util.concurrent.atomic.AtomicLong;
+import org.jboss.netty.channel.ChannelHandler;
 
 public class BasicClient extends SimpleChannelHandler implements Comparable<BasicClient> {
     private static final Log LOG = LogFactory.getLog(BasicClient.class);
@@ -176,10 +177,10 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
     final int myId;
 
     public BasicClient(Properties conf) throws IOException {
-        this(conf,0,false);
+        this(conf,0,false, null);
     }
 
-    public BasicClient(Properties conf, int id, boolean introduceYourself) throws IOException {
+    public BasicClient(Properties conf, int id, boolean introduceYourself, ChannelHandler handler) throws IOException {
         myId = id;
         state = State.DISCONNECTED;
         queuedOps = new ArrayBlockingQueue<Op>(200);
@@ -195,7 +196,7 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
         int executorThreads = Integer.parseInt(tmp);
         bootstrap.getPipeline().addLast("executor", new ExecutionHandler(
                     new OrderedMemoryAwareThreadPoolExecutor(executorThreads, 1024*1024, 4*1024*1024)));
-        bootstrap.getPipeline().addLast("handler", this);
+        bootstrap.getPipeline().addLast("handler", handler != null ? handler : this);
         bootstrap.setOption("tcpNoDelay", false);
         bootstrap.setOption("keepAlive", true);
         bootstrap.setOption("reuseAddress", true);
@@ -281,8 +282,7 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
     synchronized
     public void channelOpen(ChannelHandlerContext ctx, ChannelStateEvent e) {
         e.getChannel().getPipeline().addFirst("decoder", new TSODecoder());
-        e.getChannel().getPipeline().addAfter("decoder", "encoder",
-                new TSOEncoder());
+        e.getChannel().getPipeline().addAfter("decoder", "encoder", new TSOEncoder());
     }
 
     /**

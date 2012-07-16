@@ -17,6 +17,7 @@
 package com.yahoo.omid.tso;
 
 import com.yahoo.omid.tso.serialization.SeqDecoder;
+import com.yahoo.omid.tso.serialization.TSODecoder;
 import com.yahoo.omid.tso.serialization.TSOEncoder;
 
 import java.net.InetSocketAddress;
@@ -53,32 +54,25 @@ import org.apache.zookeeper.ZooKeeper;
 /**
  * Sequencer Server
  */
-public class SequencerServer extends TSOServer {
+public class SequencerServer  implements Runnable {
 
     private static final Log LOG = LogFactory.getLog(SequencerServer.class);
 
-    /**
-     * The interface to the tsos
-     */
-    TSOClient[] tsoClients;
+    private TSOServerConfig config;
+    private boolean finish = false;
+    private Object lock = new Object();
+    protected ChannelGroup channelGroup = new DefaultChannelGroup(SequencerServer.class.getName());
 
     ZooKeeper zk;
 
-    public SequencerServer(TSOServerConfig config, Properties[] soConfs, ZooKeeper zk) {
-        super(config);
+    public SequencerServer(TSOServerConfig config, OmidConfiguration omidConf, Properties[] soConfs, ZooKeeper zk) {
+        super();
+        this.config = config;
+        this.omidConf = omidConf;
         this.zk = zk;
-        tsoClients = new TSOClient[soConfs.length];
-        try {
-            for (int i = 0; i < soConfs.length; i++) {
-                final int id = 0;//the id does not matter here
-                tsoClients[i] = new TSOClient(soConfs[i], 0, false);
-            }
-        } catch (IOException e) {
-            LOG.error("SO is not available " + e);
-            e.printStackTrace();
-            System.exit(1);
-        }
     }
+
+    OmidConfiguration omidConf = null;
 
     /**
      * Take two arguments :<br>
@@ -95,49 +89,116 @@ public class SequencerServer extends TSOServer {
         ZooKeeper zk = new ZooKeeper(config.getZkServers(), 
                 Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
                 null);
-        new SequencerServer(config, omidConf.getStatusOracleConfs(), zk).run();
+        new SequencerServer(config, omidConf, omidConf.getStatusOracleConfs(), zk).run();
     }
 
     SequencerHandler sequencerHandler;
+
+    public static int SEQ_REGISTER_PORT_SHIFT = 2;
     @Override
-    protected ChannelHandler newMessageHandler() {
-        sequencerHandler = new SequencerHandler(channelGroup, tsoClients, zk);
-        return sequencerHandler;
-    }
+    public void run() {
+        int maxSocketThreads = 1;
+        ChannelFactory factory = new NioServerSocketChannelFactory(
+                Executors.newCachedThreadPool(),
+                Executors.newCachedThreadPool(),
+                maxSocketThreads);
+        ServerBootstrap bootstrap = new ServerBootstrap(factory);
+        // Create the global ChannelGroup
+        channelGroup = new DefaultChannelGroup(SequencerServer.class.getName());
+        //More concurrency gives lower performance due to synchronizations
+        int maxThreads = omidConf.getInt("tso.maxthread", 4);
+        System.out.println("maxThreads: " + maxThreads);
+        // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
+        ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
 
-    @Override
-    protected ChannelPipelineFactory newPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
-        return new SeqPipelineFactory(pipelineExecutor, handler);
-    }
-
-    @Override
-    protected void stopHandler(ChannelHandler handler) {
-        //((SequencerHandler)handler).stop();
-    }
-
-    class SeqPipelineFactory implements ChannelPipelineFactory {
-
-        private Executor pipelineExecutor = null;
-        ExecutionHandler x = null;// = new ExecutionHandler(pipelineExecutor);
-        ChannelHandler handler = null;
-
-        public SeqPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
-            super();
-            this.pipelineExecutor = pipelineExecutor;
-            this.handler = handler;
-        }
-
-        public ChannelPipeline getPipeline() throws Exception {
-            ChannelPipeline pipeline = Channels.pipeline();
-            pipeline.addLast("decoder", new SeqDecoder());
-            synchronized (this) {
-                if (x == null)
-                    x = new ExecutionHandler(pipelineExecutor);
+        sequencerHandler = new SequencerHandler(channelGroup, zk, omidConf.getStatusOracleConfs().length);
+        //ChannelPipelineFactory pipelineFactory =  new SeqPipelineFactory(pipelineExecutor, sequencerHandler);
+        final ExecutionHandler executionHandler = new ExecutionHandler(pipelineExecutor);
+        ChannelPipelineFactory pipelineFactory =  new ChannelPipelineFactory() {
+            @Override
+            public ChannelPipeline getPipeline() throws Exception {
+                ChannelPipeline pipeline = Channels.pipeline();
+                pipeline.addLast("decoder", new SeqDecoder());
+                pipeline.addLast("pipelineExecutor", executionHandler);
+                pipeline.addLast("handler", sequencerHandler);
+                return pipeline;
             }
-            pipeline.addLast("pipelineExecutor", x);
-            pipeline.addLast("handler", handler);
-            return pipeline;
+        };
+        bootstrap.setPipelineFactory(pipelineFactory);
+        bootstrap.setOption("tcpNoDelay", false);
+        bootstrap.setOption("child.tcpNoDelay", false);
+        bootstrap.setOption("child.keepAlive", true);
+        bootstrap.setOption("child.reuseAddress", true);
+        bootstrap.setOption("child.connectTimeoutMillis", 60000);
+        bootstrap.setOption("readWriteFair", true);
+
+        //Register a pipeline that accepts registration for the broadcast service
+        ChannelGroup registerGroup = new DefaultChannelGroup("register");
+        ChannelFactory factory2 = new NioServerSocketChannelFactory(
+                Executors.newCachedThreadPool(),
+                Executors.newCachedThreadPool(),
+                maxSocketThreads);
+        ServerBootstrap registerBootstrap = new ServerBootstrap(factory2);
+        // Memory limitation: 10K by channel, 100K global, 100 ms of timeout
+        ThreadPoolExecutor registerPipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(1, 10*1024, 100*1024, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
+        registerBootstrap.setOption("tcpNoDelay", false);
+        registerBootstrap.setOption("child.tcpNoDelay", false);
+        registerBootstrap.setOption("child.keepAlive", true);
+        registerBootstrap.setOption("child.reuseAddress", true);
+        registerBootstrap.setOption("child.connectTimeoutMillis", 60000);
+        registerBootstrap.setOption("readWriteFair", true);
+        final ExecutionHandler registerExecutionHandler = new ExecutionHandler(registerPipelineExecutor);
+        registerBootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+           @Override
+           public ChannelPipeline getPipeline() throws Exception {
+               System.out.println("creating a new pipeline");
+              ChannelPipeline pipeline = Channels.pipeline();
+              pipeline.addLast("decoder", new TSODecoder());
+              pipeline.addLast("pipelineExecutor", registerExecutionHandler);
+              pipeline.addLast("handler", sequencerHandler);
+              return pipeline;
+           }
+        });
+        Channel channel = registerBootstrap.bind(new InetSocketAddress(config.getPort() + SEQ_REGISTER_PORT_SHIFT));
+        registerGroup.add(channel);
+
+        // Create the monitor
+        ThroughputMonitor monitor = new ThroughputMonitor(null);
+        // Add the parent channel to the group
+        channel = bootstrap.bind(new InetSocketAddress(config.getPort()));
+        channelGroup.add(channel);
+
+        // Starts the monitor
+        monitor.start();
+        synchronized (lock) {
+            while (!finish) {
+                try {
+                    lock.wait();
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
         }
+
+        //stopHandler(handler);//handler.stop();
+
+        // *** Start the Netty shutdown ***
+        // End the monitor
+        System.out.println("End of monitor");
+        monitor.interrupt();
+        // Now close all channels
+        System.out.println("End of channel group");
+        channelGroup.close().awaitUninterruptibly();
+        // Close the executor for Pipeline
+        System.out.println("End of pipeline executor");
+        pipelineExecutor.shutdownNow();
+        registerPipelineExecutor.shutdownNow();
+        // Now release resources
+        System.out.println("End of resources");
+        factory.releaseExternalResources();
     }
 
+    public void stop() {
+        finish = true;
+    }
 }

@@ -119,7 +119,7 @@ public class TSOClient extends BasicClient {
     }
 
     public TSOClient(Properties conf, int id, boolean introduceYourself, AtomicLong sequenceGenerator) throws IOException {
-        super(conf, id, introduceYourself);
+        super(conf, id, introduceYourself, null);
         this.sequenceGenerator = sequenceGenerator;
         commitCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<CommitResponse>>());
         prepareCallbacks = Collections.synchronizedMap(new HashMap<Long, PingPongCallback<PrepareResponse>>());
@@ -339,10 +339,14 @@ public class TSOClient extends BasicClient {
         });
     }
 
+    /**
+     * It is possible that clearState is invoked before the constructor is called
+     */
     @Override
     protected void clearState() {
         committed = new Committed();
-        aborted.clear();
+        if (aborted != null)
+            aborted.clear();
         largestDeletedTimestamp = 0;
         connectionTimestamp = 0;
         hasConnectionTimestamp = false;

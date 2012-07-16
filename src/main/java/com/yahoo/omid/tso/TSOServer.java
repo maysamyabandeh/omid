@@ -20,7 +20,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import com.yahoo.omid.client.TSOClient;
+import com.yahoo.omid.client.SequencerClient;
 import java.util.Properties;
 
 import java.io.IOException;
@@ -59,6 +59,10 @@ public class TSOServer implements Runnable {
     private boolean finish;
     private Object lock;
     protected ChannelGroup channelGroup = new DefaultChannelGroup(TSOServer.class.getName());
+    /**
+     * The interface to the sequencer
+     */
+    SequencerClient sequencerClient;
 
     public TSOServer() {
         super();
@@ -135,9 +139,6 @@ public class TSOServer implements Runnable {
         // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
         ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
 
-        // This is the only object of timestamp oracle
-        // TODO: make it singleton
-        //TimestampOracle timestampOracle = new TimestampOracle();
         // The wrapper for the shared state of TSO
         state = BookKeeperStateBuilder.getState(this.config);
         state.setId(config.getId());
@@ -164,6 +165,24 @@ public class TSOServer implements Runnable {
         bootstrap.setOption("child.reuseAddress", true);
         bootstrap.setOption("child.connectTimeoutMillis", 60000);
         bootstrap.setOption("readWriteFair", true);
+
+
+        /**
+         * Connect to the sequencer
+         */
+        Properties sequencerSetupConf = new Properties(sequencerConf);
+        String seqPortStr = sequencerSetupConf.getProperty("tso.port");
+        int seqPort = Integer.parseInt(seqPortStr);
+        //the port that accepts the broacast registration is different
+        seqPort += SequencerServer.SEQ_REGISTER_PORT_SHIFT;
+        seqPortStr = Integer.toString(seqPort);
+        sequencerSetupConf.setProperty("tso.port", seqPortStr);
+        try {
+            this.sequencerClient = new SequencerClient(sequencerSetupConf, handler);
+        } catch (IOException e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
 
         // *** Start the Netty running ***
 
