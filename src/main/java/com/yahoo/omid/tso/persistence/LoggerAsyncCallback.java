@@ -22,12 +22,27 @@ public interface LoggerAsyncCallback {
     public interface LoggerInitCallback{
         void loggerInitComplete(int rc, StateLogger sl, Object ctx);
     }
-    
+
     public interface BuilderInitCallback{
         void builderInitComplete(int rc, TSOState state, Object ctx);
     }
-    
+
     public interface AddRecordCallback {
         void addRecordComplete(int rc, Object ctx);
+    }
+
+    /**
+     * After reading a range of bytes, this callback is invoked.
+     */
+    public interface ReadRangeCallback {
+        /**
+         * This method is invoked after each part of the range is read.
+         */
+        void rangePartiallyRead(int rc, byte[] readData);
+        /**
+         * This method is invoked after the last part of the range is read.
+         * lastReadIndex indicates the last read byte
+         */
+        void rangeReadComplete(int rc, long lastReadIndex);
     }
 }

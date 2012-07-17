@@ -47,6 +47,10 @@ public class LogPersister implements FollowedPointer {
         atomicPersistingGlobalPointer = new AtomicLong(0);
     }
 
+    public final long getGlobalPointer() {
+        return atomicPersistedGlobalPointer.get();
+    }
+
     /**
      * read the newly generated content by the subject
      * return null if there is no new content

@@ -18,6 +18,7 @@ package com.yahoo.omid.client;
 
 import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
 import com.yahoo.omid.tso.messages.EndOfBroadcast;
+import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.TSOHandler;
 import com.yahoo.omid.tso.TSOState;
 import com.yahoo.omid.tso.TSOMessage;
@@ -31,6 +32,11 @@ import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.ChannelStateEvent;
 import org.jboss.netty.channel.ExceptionEvent;
+import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.ReadRangeCallback;
+import com.yahoo.omid.tso.persistence.LogBackendReader;
+import com.yahoo.omid.tso.persistence.LoggerException.Code;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
 
 /**
  * This client connects to the sequencer to register as a receiver of the broadcast stream
@@ -44,6 +50,26 @@ public class SequencerClient extends BasicClient {
     ChannelGroup channelGroup;
 
     long lastReadIndex = 0;
+    //for the moment use a dummy logBackendReader
+    //it should be replaced by ManagedLedger when it is released
+    LogBackendReader logBackendReader = new LogBackendReader() {
+        @Override
+        public void readRange(long fromIndex, long toIndex, ReadRangeCallback cb) {
+            //read dummy but safe data
+            System.out.println("readRange from backend : " + fromIndex + " " + toIndex);
+            for (long lastReadIndex = fromIndex - 1; lastReadIndex < toIndex; ) {
+                PeerIdAnnoncement dummyMsg = new PeerIdAnnoncement(-2);
+                ChannelBuffer buffer = ChannelBuffers.buffer(20);
+                buffer.writeByte(TSOMessage.PeerIdAnnoncement);
+                dummyMsg.writeObject(buffer);
+                lastReadIndex += buffer.readableBytes();
+                byte[] dst = new byte[buffer.readableBytes()];
+                buffer.readBytes(dst);
+                cb.rangePartiallyRead(Code.OK, dst);
+            }
+            cb.rangeReadComplete(Code.OK, lastReadIndex);
+        }
+    };
 
     public SequencerClient(Properties conf, TSOState tsoState, ChannelGroup channelGroup) throws IOException {
         super(conf,0,false, null);
@@ -70,9 +96,11 @@ public class SequencerClient extends BasicClient {
             @Override
             public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
                 Object msg = e.getMessage();
-                if (msg instanceof EndOfBroadcast)
-                    resumeBroadcast();
-                else {
+                if (msg instanceof EndOfBroadcast) {
+                    System.out.println(msg);
+                    readGapFromLogBackend((EndOfBroadcast)msg);
+                    //afterwards it resumes reading from the braodcaster
+                } else {
                     TSOMessage tsoMsg = (TSOMessage) msg;
                     try {
                         lastReadIndex += tsoMsg.size();
@@ -89,9 +117,34 @@ public class SequencerClient extends BasicClient {
         super.channelConnected(ctx, e);
     }
 
+    void readGapFromLogBackend(EndOfBroadcast msg) {
+        final long fromIndex = lastReadIndex + 1;
+        //since during reading from backend, the gap expands, we conservatively read
+        //all the persisted data from the backend and then continute reading the
+        //rest from the broadcaster
+        final long toIndex = msg.lastAvailableIndex;
+        logBackendReader.readRange(
+                fromIndex,
+                toIndex,
+                new ReadRangeCallback() {
+                    @Override
+                    public void rangePartiallyRead(int rc, byte[] readData) {
+                        //LOG.warn("rangePartiallyRead until " + lastReadIndex);
+                        //feed the readData to the pipeline
+                        //TODO: do it
+                    }
+                    @Override
+                    public void rangeReadComplete(int rc, long lastReadIndex) {
+                        LOG.warn("rangeReadComplete " + lastReadIndex);
+                        //TODO: improvisation, remove it later
+                        //cancel the effect of reads
+                        SequencerClient.this.lastReadIndex = fromIndex - 1;
+                        resumeBroadcast();
+                    }
+                });
+    }
+
     void resumeBroadcast() {
-        //TODO: resume properly
-        System.out.println("End of Broadcast");
         try {
             registerForBroadcast(lastReadIndex);
         } catch (IOException ioe) {

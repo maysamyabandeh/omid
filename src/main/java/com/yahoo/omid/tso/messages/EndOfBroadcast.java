@@ -28,28 +28,36 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  */
 public class EndOfBroadcast extends SizedTSOMessage implements TSOMessage {
-    public long firstAvailableIndex;
+    /**
+     * The latest index available for reading
+     */
+    public long lastAvailableIndex;
 
     public EndOfBroadcast() {
     }
 
-    public EndOfBroadcast(long firstAvailableIndex) {
-        this.firstAvailableIndex = firstAvailableIndex;
+    public EndOfBroadcast(long lastAvailableIndex) {
+        this.lastAvailableIndex = lastAvailableIndex;
+    }
+
+    @Override
+    public String toString() {
+        return "EndOfBroadcast suggesting " + lastAvailableIndex;
     }
 
     @Override
     public void writeObject(DataOutputStream aOutputStream) throws IOException {
-        aOutputStream.writeLong(firstAvailableIndex);
+        aOutputStream.writeLong(lastAvailableIndex);
     }
 
     @Override
     public void readObject(ChannelBuffer aInputStream) throws IOException {
-        firstAvailableIndex = aInputStream.readLong();
+        lastAvailableIndex = aInputStream.readLong();
     }
 
     @Override
     public void writeObject(ChannelBuffer buffer)  {
-        buffer.writeLong(firstAvailableIndex);
+        buffer.writeLong(lastAvailableIndex);
     }
 }
 

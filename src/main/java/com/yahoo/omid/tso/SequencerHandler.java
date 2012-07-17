@@ -173,6 +173,7 @@ public class SequencerHandler extends SimpleChannelHandler {
         public void run() {
             try {
                 if (!channel.isConnected()) {
+                    LOG.error("Broadcast channel is not connected");
                     stopBroadcastingTo(channel);
                     return;
                 }
@@ -213,7 +214,9 @@ public class SequencerHandler extends SimpleChannelHandler {
             //if we cannot stop broadcasting, sending EOB messes with semantics
             if (!result)
                 return;
-            EndOfBroadcast eob = new EndOfBroadcast();
+            final long suggestIndexForResume = logPersister.getGlobalPointer();
+            System.out.println("sending EOB: suggesting " + suggestIndexForResume);
+            EndOfBroadcast eob = new EndOfBroadcast(suggestIndexForResume);
             ChannelBuffer buffer = ChannelBuffers.buffer(20);
             buffer.writeByte(TSOMessage.EndOfBroadcast);
             eob.writeObject(buffer);
