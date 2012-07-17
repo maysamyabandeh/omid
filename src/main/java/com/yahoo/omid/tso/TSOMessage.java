@@ -60,6 +60,8 @@ public interface TSOMessage {
    final public byte PrepareResponse =(byte) 0xd0;
    final public byte PeerIdAnnoncement =(byte) 0xd1;
    final public byte MultiCommitRequest =(byte) 0xd2;
+   final public byte BroadcastJoinRequest =(byte) 0xd3;
+   final public byte EndOfBroadcast =(byte) 0xd4;
 
    /*
     * Deserialize function
@@ -73,6 +75,18 @@ public interface TSOMessage {
     */
    public void writeObject(DataOutputStream aOutputStream)
    throws IOException;
-   
+
    public void writeObject(ChannelBuffer buffer);
+
+   /**
+    * returns the size of this message after serialization or before deserialization
+    * throws Exception if the size cannot be calculated
+    */
+   public int size() throws Exception;
+   //TODO: throw a specialied exception
+
+   /**
+    * set the size of this message in bytes
+    */
+   public void setSize(int sizeInBytes);
 }

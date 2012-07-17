@@ -34,10 +34,10 @@ public class LogReader {
     private long lastGlobalPointer;
     private FollowedPointer subject;
 
-    public LogReader(SharedLog log, FollowedPointer subject) {
+    public LogReader(SharedLog log, FollowedPointer subject, long startingGlobalIndex) {
         this.log = log;
         this.subject = subject;
-        this.globalPointer = 0;
+        this.globalPointer = startingGlobalIndex;
         this.lastGlobalPointer = this.globalPointer;
     }
 
@@ -72,6 +72,11 @@ public class LogReader {
         boolean isValid = subject.isPointerValid(lastGlobalPointer);
         if (!isValid)
             throw new SharedLogLateFollowerException();
+    }
+
+    @Override
+    public String toString() {
+        return "LogReader: globalPointer: " + globalPointer + " lastGlobalPointer: " + lastGlobalPointer;
     }
 }
 

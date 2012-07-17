@@ -62,7 +62,7 @@ public class TSOServer implements Runnable {
     /**
      * The interface to the sequencer
      */
-    SequencerClient sequencerClient;
+    private SequencerClient sequencerClient;
 
     public TSOServer() {
         super();
@@ -109,7 +109,7 @@ public class TSOServer implements Runnable {
     }
 
     protected ChannelHandler newMessageHandler() {
-        return new TSOHandler(channelGroup, state, sequencerConf);
+        return new TSOHandler(channelGroup, state);
     }
 
     protected ChannelPipelineFactory newPipelineFactory(Executor pipelineExecutor, ChannelHandler handler) {
@@ -142,6 +142,7 @@ public class TSOServer implements Runnable {
         // The wrapper for the shared state of TSO
         state = BookKeeperStateBuilder.getState(this.config);
         state.setId(config.getId());
+        state.initSequencerClient(sequencerConf);
         
         if(state == null){
             LOG.error("Couldn't build state");
@@ -178,7 +179,7 @@ public class TSOServer implements Runnable {
         seqPortStr = Integer.toString(seqPort);
         sequencerSetupConf.setProperty("tso.port", seqPortStr);
         try {
-            this.sequencerClient = new SequencerClient(sequencerSetupConf, handler);
+            this.sequencerClient = new SequencerClient(sequencerSetupConf, state, channelGroup);
         } catch (IOException e) {
             e.printStackTrace();
             System.exit(1);

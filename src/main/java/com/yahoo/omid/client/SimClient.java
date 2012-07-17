@@ -100,7 +100,7 @@ public class SimClient {
 
     static boolean pauseClient = false;
 
-    static float percentReads = 80;
+    static float percentReads = 0;//80;
 
     static private int QUERY_RATE = 100;// send a query after this number of commit
     // requests
@@ -506,7 +506,7 @@ while (curMessage > 0) {
         }
 
         protected void launchBenchmark() {
-            launchLocalBenchmark();
+            //launchLocalBenchmark();
         }
 
         /**

@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  * 
  */
-public class TimestampResponse implements TSOMessage, Sequencable {
+public class TimestampResponse extends SizedTSOMessage implements TSOMessage, Sequencable {
 
    /**
     * the timestamp

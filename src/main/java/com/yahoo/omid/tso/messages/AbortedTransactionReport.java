@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class AbortedTransactionReport implements TSOMessage {   
+public class AbortedTransactionReport extends SizedTSOMessage implements TSOMessage {
     /**
      * Starting timestamp
      */

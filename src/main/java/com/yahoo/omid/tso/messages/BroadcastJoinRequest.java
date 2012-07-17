@@ -24,42 +24,35 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import com.yahoo.omid.tso.TSOMessage;
 
 /**
- * The message object for annoncing the id to the peer
+ * The message object for registering for a broadcast stream
  * @author maysam
- *
  */
-public class PeerIdAnnoncement extends SizedTSOMessage implements TSOMessage {
-    /**
-     * what is the peer id
-     */
-    public int peerId;
+public class BroadcastJoinRequest extends SizedTSOMessage implements TSOMessage {
+    public long lastRecievedIndex;
 
-    public PeerIdAnnoncement() {
+    public BroadcastJoinRequest() {
     }
 
-    public PeerIdAnnoncement(int peerId) {
-        this.peerId = peerId;
-    }
-
-    public int getPeerId() {
-        return peerId;
+    public BroadcastJoinRequest(long lastRecievedIndex) {
+        this.lastRecievedIndex = lastRecievedIndex;
     }
 
     @Override
     public void writeObject(DataOutputStream aOutputStream) throws IOException {
-        aOutputStream.writeInt(peerId);
+        aOutputStream.writeLong(lastRecievedIndex);
     }
 
     @Override
     public void readObject(ChannelBuffer aInputStream) throws IOException {
-        peerId = aInputStream.readInt();
+        lastRecievedIndex = aInputStream.readLong();
     }
 
     @Override
     public void writeObject(ChannelBuffer buffer)  {
-        buffer.writeInt(peerId);
+        buffer.writeLong(lastRecievedIndex);
     }
 }
+
 
 
 

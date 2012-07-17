@@ -352,7 +352,7 @@ public class TSOHandler extends SimpleChannelHandler {
                 */
                 LOG.warn("CommitRequest for non-pending transaction! " +
                         msg.getStartTimestamp() + "|" + msg + "|" + sharedState.prepareCommitHistory.size());
-                //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + prepareCommitHistory);
+                //LOG.error(msg.getStartTimestamp() + "|" + msg + "|" + sharedState.prepareCommitHistory);
                 return;
             }
             msg.readRows = prep.readRows;

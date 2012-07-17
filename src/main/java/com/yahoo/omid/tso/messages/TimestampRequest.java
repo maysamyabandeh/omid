@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class TimestampRequest implements TSOMessage, Sequencable, Peerable {
+public class TimestampRequest extends SizedTSOMessage implements TSOMessage, Sequencable, Peerable {
     /**
      * should we track the progress of the timestamp that is assigned to this txn.
      * or it is just a sequence request

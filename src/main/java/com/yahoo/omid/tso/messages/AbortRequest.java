@@ -13,7 +13,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  * 
  */
-public class AbortRequest implements TSOMessage {
+public class AbortRequest extends SizedTSOMessage implements TSOMessage {
 
    /**
     * Starting timestamp

@@ -16,6 +16,12 @@
 
 package com.yahoo.omid.client;
 
+import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
+import com.yahoo.omid.tso.messages.EndOfBroadcast;
+import com.yahoo.omid.tso.TSOHandler;
+import com.yahoo.omid.tso.TSOState;
+import com.yahoo.omid.tso.TSOMessage;
+import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.ChannelHandler;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -24,26 +30,74 @@ import java.util.Properties;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.ChannelStateEvent;
+import org.jboss.netty.channel.ExceptionEvent;
 
 /**
  * This client connects to the sequencer to register as a receiver of the broadcast stream
+ * Note: This class is not thread-safe
  */
 public class SequencerClient extends BasicClient {
     private static final Log LOG = LogFactory.getLog(TSOClient.class);
-    ChannelHandler handler;
 
-    public SequencerClient(Properties conf, ChannelHandler handler) throws IOException {
-        super(conf,0,true, null);
+    //needed to create TSOHandler
+    TSOState tsoState;
+    ChannelGroup channelGroup;
+
+    long lastReadIndex = 0;
+
+    public SequencerClient(Properties conf, TSOState tsoState, ChannelGroup channelGroup) throws IOException {
+        super(conf,0,false, null);
         //the id does not matter here (=0)
-        this.handler = handler;
+        this.tsoState = tsoState;
+        this.channelGroup = channelGroup;
+        registerForBroadcast(lastReadIndex);
+    }
+
+    /**
+     * Send the id to the peer of the connection
+     */
+    void registerForBroadcast(long lastReadIndex) throws IOException {
+        System.out.println("registerForBroadcast " + lastReadIndex);
+        BroadcastJoinRequest msg = new BroadcastJoinRequest(lastReadIndex);
+        withConnection(new MessageOp<BroadcastJoinRequest>(msg));
     }
 
     @Override
     synchronized
     public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
         ctx.getChannel().getPipeline().remove("handler");
-        ctx.getChannel().getPipeline().addLast("handler", handler);
+        ctx.getChannel().getPipeline().addLast("handler", new TSOHandler(channelGroup, tsoState) {
+            @Override
+            public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+                Object msg = e.getMessage();
+                if (msg instanceof EndOfBroadcast)
+                    resumeBroadcast();
+                else {
+                    TSOMessage tsoMsg = (TSOMessage) msg;
+                    try {
+                        lastReadIndex += tsoMsg.size();
+                    } catch (Exception exp) {
+                        LOG.error("Error in getting the size of a TSOMessage: " + tsoMsg + exp);
+                        exp.printStackTrace();
+                    }
+                    //System.out.println("servicing message " + tsoMsg);
+                    super.messageReceived(ctx, e);
+                }
+            }
+
+        });
         super.channelConnected(ctx, e);
+    }
+
+    void resumeBroadcast() {
+        //TODO: resume properly
+        System.out.println("End of Broadcast");
+        try {
+            registerForBroadcast(lastReadIndex);
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+            //TODO: handle properly
+        }
     }
 
     /**
@@ -53,6 +107,13 @@ public class SequencerClient extends BasicClient {
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         LOG.error("Unexpected message recieved at SequencerClient: " + e.getMessage());
         System.exit(1);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, ExceptionEvent e)
+    throws Exception {
+        System.out.println("Unexpected exception " + e.getCause());
+        e.getCause().printStackTrace();
     }
 }
 

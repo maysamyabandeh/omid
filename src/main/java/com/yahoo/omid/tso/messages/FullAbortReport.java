@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class FullAbortReport implements TSOMessage {
+public class FullAbortReport extends SizedTSOMessage implements TSOMessage {
 
     /**
      * the start timestamp of the fully aborted transaction

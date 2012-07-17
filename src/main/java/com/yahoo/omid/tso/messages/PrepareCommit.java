@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class PrepareCommit implements TSOMessage {
+public class PrepareCommit extends SizedTSOMessage implements TSOMessage {
 
     /**
      * Starting timestamp

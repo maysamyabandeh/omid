@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class EldestUpdate implements TSOMessage {
+public class EldestUpdate extends SizedTSOMessage implements TSOMessage {
 
     /**
      * the start timestamp of the eldest transaction

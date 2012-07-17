@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class LargestDeletedTimestampReport implements TSOMessage {   
+public class LargestDeletedTimestampReport extends SizedTSOMessage implements TSOMessage {
     /**
      * Starting timestamp
      */

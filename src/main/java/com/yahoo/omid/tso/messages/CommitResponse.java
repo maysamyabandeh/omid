@@ -31,7 +31,7 @@ import java.util.ArrayList;
  * @author maysam
  */
 
-public class CommitResponse implements TSOMessage {
+public class CommitResponse extends SizedTSOMessage implements TSOMessage {
 
     /**
      * Starting timestamp to uniquely identify the request

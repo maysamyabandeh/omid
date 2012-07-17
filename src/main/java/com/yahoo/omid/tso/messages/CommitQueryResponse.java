@@ -24,7 +24,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import com.yahoo.omid.tso.TSOMessage;
 
 
-public class CommitQueryResponse implements TSOMessage {
+public class CommitQueryResponse extends SizedTSOMessage implements TSOMessage {
    public long startTimestamp;
    public long commitTimestamp;
    public long queryTimestamp;

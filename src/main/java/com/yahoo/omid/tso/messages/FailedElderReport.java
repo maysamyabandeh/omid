@@ -28,7 +28,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class FailedElderReport implements TSOMessage {
+public class FailedElderReport extends SizedTSOMessage implements TSOMessage {
 
     /**
      * the start timestamp of the reincarnated transaction

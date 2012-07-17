@@ -30,7 +30,6 @@ import org.jboss.netty.handler.codec.frame.FrameDecoder;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.TSOSharedMessageBuffer;
 import com.yahoo.omid.tso.messages.AbortRequest;
-import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.AbortedTransactionReport;
 import com.yahoo.omid.tso.messages.CommitQueryRequest;
 import com.yahoo.omid.tso.messages.CommitQueryResponse;
@@ -44,6 +43,8 @@ import com.yahoo.omid.tso.messages.FailedElderReport;
 import com.yahoo.omid.tso.messages.EldestUpdate;
 import com.yahoo.omid.tso.messages.ReincarnationReport;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
+import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
+import com.yahoo.omid.tso.messages.EndOfBroadcast;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
@@ -115,6 +116,12 @@ public class TSODecoder extends FrameDecoder {
                     case TSOMessage.PeerIdAnnoncement:
                         msg = new PeerIdAnnoncement();
                         break;
+                    case TSOMessage.BroadcastJoinRequest:
+                        msg = new BroadcastJoinRequest();
+                        break;
+                    case TSOMessage.EndOfBroadcast:
+                        msg = new EndOfBroadcast();
+                        break;
                     case TSOMessage.MultiCommitRequest:
                         msg = new MultiCommitRequest();
                         break;
@@ -148,8 +155,11 @@ public class TSODecoder extends FrameDecoder {
                 }
             }
             final boolean readSize = type == TSOMessage.TimestampRequest || type == TSOMessage.MultiCommitRequest;
-            if (readSize)//read the size field and discard it
-                ostream.readShort();
+            if (readSize) {//read the size field
+                int size = ostream.readShort();
+                msg.setSize(size);
+                //TODO: all the size business could be moved inside the serialize and deserialize methods
+            }
             msg.readObject(ostream);
         } catch (IndexOutOfBoundsException e) {
             // Not enough byte in the buffer, reset to the start for the next try

@@ -31,7 +31,7 @@ import java.util.ArrayList;
  * @author maysam
  */
 
-public class PrepareResponse implements TSOMessage {
+public class PrepareResponse extends SizedTSOMessage implements TSOMessage {
 
     /**
      * Starting timestamp to uniquely identify the request

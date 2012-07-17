@@ -51,6 +51,8 @@ import org.jboss.netty.channel.group.DefaultChannelGroup;
 
 import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
+import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
+import com.yahoo.omid.tso.messages.EndOfBroadcast;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
@@ -141,17 +143,15 @@ public class SequencerHandler extends SimpleChannelHandler {
         }
     }
 
-    void initReader(Channel channel, FollowedPointer subject) {
+    void initReader(Channel channel, BroadcastJoinRequest msg, FollowedPointer subject) {
         LogReader logReader;
         synchronized (channelToReaderMap) {
             logReader = channelToReaderMap.get(channel);
-            if (logReader == null) {
-                logReader = new LogReader(sharedLog, subject);
-                channelToReaderMap.put(channel, logReader);
-                LOG.warn("init reader for: " + channel);
-            } else {
+            if (logReader != null)
                 LOG.error("reader already mapped to the tso! " + channel);
-            }
+            logReader = new LogReader(sharedLog, subject, msg.lastRecievedIndex);
+            channelToReaderMap.put(channel, logReader);
+            LOG.warn("init reader for: " + channel);
         }
         BroadcastThread broadcastThread = new BroadcastThread(channel, logReader);
         final ScheduledFuture<?> schedulerControler = broadcasters.scheduleAtFixedRate(broadcastThread, 0, BROADCAST_TIMEOUT, TimeUnit.MILLISECONDS);
@@ -181,7 +181,11 @@ public class SequencerHandler extends SimpleChannelHandler {
                     return;
                 TSOSharedMessageBuffer._flushes++;
                 TSOSharedMessageBuffer._flSize += tail.readableBytes();
+                System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
+                //System.out.println("(" + schedulerControler == null ? "null" : schedulerControler.isCancelled() + ") " + "Braodcasting " + tail.readableBytes() + " from " + logReader);
                 channel.write(tail);
+                //TODO: this is for test, must be removed later
+                sendEOB(channel);
             } catch (SharedLogLateFollowerException lateE) {
                 //TODO do something
                 lateE.printStackTrace();
@@ -194,10 +198,26 @@ public class SequencerHandler extends SimpleChannelHandler {
             }
         }
 
-        void stopBroadcastingTo(Channel channel) {
+        boolean stopBroadcastingTo(Channel channel) {
+            if (schedulerControler == null) {
+                LOG.error("No contoller set to stop the broadcast: " + channel);
+                return false;
+            }
             LOG.error("Stop broadcasting to channel: " + channel);
-            if (schedulerControler != null)
-                schedulerControler.cancel(false);
+            schedulerControler.cancel(false);
+            return true;
+        }
+
+        void sendEOB(Channel channel) {
+            boolean result = stopBroadcastingTo(channel);
+            //if we cannot stop broadcasting, sending EOB messes with semantics
+            if (!result)
+                return;
+            EndOfBroadcast eob = new EndOfBroadcast();
+            ChannelBuffer buffer = ChannelBuffers.buffer(20);
+            buffer.writeByte(TSOMessage.EndOfBroadcast);
+            eob.writeObject(buffer);
+            channel.write(buffer);
         }
     }
 
@@ -275,9 +295,8 @@ public class SequencerHandler extends SimpleChannelHandler {
     @Override
     public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
         Object msg = e.getMessage();
-        if (msg instanceof PeerIdAnnoncement) {//coming from TSO to register
-            //TODO: use a proper message for registering for the broadcast channel
-            initReader(ctx.getChannel(), logPersister);
+        if (msg instanceof BroadcastJoinRequest) {//coming from TSO to register
+            initReader(ctx.getChannel(), (BroadcastJoinRequest)msg, logPersister);
         } else
             multicast((ChannelBuffer)msg);
     }

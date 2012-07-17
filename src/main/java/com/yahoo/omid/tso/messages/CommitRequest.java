@@ -29,7 +29,7 @@ import com.yahoo.omid.tso.TSOMessage;
  * @author maysam
  *
  */
-public class CommitRequest implements TSOMessage, Peerable {
+public class CommitRequest extends SizedTSOMessage implements TSOMessage, Peerable {
 
     /**
      * Starting timestamp
