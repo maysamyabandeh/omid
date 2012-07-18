@@ -192,10 +192,11 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
                 .newCachedThreadPool(), Executors.newCachedThreadPool(), 3);
         // Create the bootstrap
         bootstrap = new ClientBootstrap(factory);
-        String tmp = conf.getProperty("tso.executor.threads", "3");
-        int executorThreads = Integer.parseInt(tmp);
-        bootstrap.getPipeline().addLast("executor", new ExecutionHandler(
-                    new OrderedMemoryAwareThreadPoolExecutor(executorThreads, 1024*1024, 4*1024*1024)));
+        //In the client that is connect to a single channel, we dont need an executor
+        //String tmp = conf.getProperty("tso.executor.threads", "3");
+        //int executorThreads = Integer.parseInt(tmp);
+        //bootstrap.getPipeline().addLast("executor", new ExecutionHandler(
+                    //new OrderedMemoryAwareThreadPoolExecutor(executorThreads, 1024*1024, 4*1024*1024)));
         bootstrap.getPipeline().addLast("handler", handler != null ? handler : this);
         bootstrap.getPipeline().addFirst("decoder", new TSODecoder());
         bootstrap.getPipeline().addAfter("decoder", "encoder", new TSOEncoder());
@@ -205,7 +206,7 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
         bootstrap.setOption("connectTimeoutMillis", 100);
 
         String host = conf.getProperty("tso.host");
-        tmp = conf.getProperty("tso.port", "1234");
+        String tmp = conf.getProperty("tso.port", "1234");
         System.out.println("Starting BasicClient to " + host + " " + tmp);
         int port = Integer.parseInt(tmp);
         tmp = conf.getProperty("tso.max_retries", "10");
