@@ -17,6 +17,8 @@
 package com.yahoo.omid.client;
 
 import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
+import com.yahoo.omid.tso.serialization.TSODecoder;
+import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.tso.messages.EndOfBroadcast;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.TSOHandler;
@@ -24,6 +26,7 @@ import com.yahoo.omid.tso.TSOState;
 import com.yahoo.omid.tso.TSOMessage;
 import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.ChannelHandler;
+import org.jboss.netty.channel.Channel;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import java.io.IOException;
@@ -37,6 +40,18 @@ import com.yahoo.omid.tso.persistence.LogBackendReader;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.iostream.IOStreamAddress;
+import org.jboss.netty.channel.iostream.IOStreamChannelFactory;
+import org.jboss.netty.bootstrap.ClientBootstrap;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.io.OutputStream;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.jboss.netty.channel.ChannelPipelineFactory;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelPipeline;
+import org.jboss.netty.channel.DefaultChannelPipeline;
 
 /**
  * This client connects to the sequencer to register as a receiver of the broadcast stream
@@ -48,6 +63,7 @@ public class SequencerClient extends BasicClient {
     //needed to create TSOHandler
     TSOState tsoState;
     ChannelGroup channelGroup;
+    PipedOutputStream loopbackDataProvider = null;
 
     long lastReadIndex = 0;
     //for the moment use a dummy logBackendReader
@@ -114,7 +130,57 @@ public class SequencerClient extends BasicClient {
             }
 
         });
+        initLoopbackChannel();
         super.channelConnected(ctx, e);
+    }
+
+    void initLoopbackChannel() {
+        final ClientBootstrap loopbackBootstrap = new ClientBootstrap(new IOStreamChannelFactory(Executors.newCachedThreadPool()));
+        loopbackBootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+            public ChannelPipeline getPipeline() throws Exception {
+                DefaultChannelPipeline pipeline = new DefaultChannelPipeline();
+                pipeline.addLast("decoder", new TSODecoder());
+                pipeline.addLast("encoder", new TSOEncoder());
+                pipeline.addLast("handler", new TSOHandler(channelGroup, tsoState) {
+                    @Override
+                    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+                        TSOMessage tsoMsg = (TSOMessage) e.getMessage();
+                        LOG.warn("Servicing message " + tsoMsg + " retrieved from the log backend");
+                        try {
+                            lastReadIndex += tsoMsg.size();
+                        } catch (Exception exp) {
+                            LOG.error("Error in getting the size of a TSOMessage: " + tsoMsg + exp);
+                            exp.printStackTrace();
+                        }
+                        super.messageReceived(ctx, e);
+                    }
+                });
+                return pipeline;
+            }
+        });
+        final PipedInputStream loopbackSrc = new PipedInputStream();
+        loopbackDataProvider = null;
+        try {
+            loopbackDataProvider = new PipedOutputStream(loopbackSrc);
+        } catch (IOException e) {
+            LOG.error("error in creating loopback pipeline!");
+            e.printStackTrace();
+            System.exit(1);
+            //TODO: handle properly
+        }
+        // Make a new connection.
+        ChannelFuture connectFuture = loopbackBootstrap.connect(
+                new IOStreamAddress(
+                    loopbackSrc,
+                    new OutputStream() {
+                        @Override
+                        public void write(int b) throws IOException {
+                            throw new IOException("Data received at /dev/null");
+                        }
+                    })
+                );
+        // Wait until the connection is made successfully.
+        final Channel loopbackChannel = connectFuture.awaitUninterruptibly().getChannel();
     }
 
     void readGapFromLogBackend(EndOfBroadcast msg) {
@@ -129,9 +195,16 @@ public class SequencerClient extends BasicClient {
                 new ReadRangeCallback() {
                     @Override
                     public void rangePartiallyRead(int rc, byte[] readData) {
-                        //LOG.warn("rangePartiallyRead until " + lastReadIndex);
+                        LOG.warn("rangePartiallyRead size: " + readData.length);
                         //feed the readData to the pipeline
-                        //TODO: do it
+                        try {
+                            loopbackDataProvider.write(readData, 0, readData.length);
+                        } catch (IOException e) {
+                            LOG.error("loopback pipeline is broken!");
+                            e.printStackTrace();
+                            System.exit(1);
+                            //TODO: handle properly
+                        }
                     }
                     @Override
                     public void rangeReadComplete(int rc, long lastReadIndex) {
