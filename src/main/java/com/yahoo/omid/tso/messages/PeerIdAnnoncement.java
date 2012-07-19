@@ -60,7 +60,7 @@ public class PeerIdAnnoncement extends SizedTSOMessage implements TSOMessage {
         peerId = aInputStream.readInt();
         //TODO: improvisation to make it work with fake PeerIdAnnoncement
         //It should be removed later
-        setSize(13);
+        setSize(1 /*type*/ + 4 /*peerId*/);
     }
 
     @Override

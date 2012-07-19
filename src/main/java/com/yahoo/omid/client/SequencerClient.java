@@ -73,17 +73,18 @@ public class SequencerClient extends BasicClient {
         public void readRange(long fromIndex, long toIndex, ReadRangeCallback cb) {
             //read dummy but safe data
             System.out.println("readRange from backend : " + fromIndex + " " + toIndex);
-            for (long lastReadIndex = fromIndex - 1; lastReadIndex < toIndex; ) {
+            long index;
+            for (index = fromIndex - 1; index < toIndex; ) {
                 PeerIdAnnoncement dummyMsg = new PeerIdAnnoncement(-2);
                 ChannelBuffer buffer = ChannelBuffers.buffer(20);
                 buffer.writeByte(TSOMessage.PeerIdAnnoncement);
                 dummyMsg.writeObject(buffer);
-                lastReadIndex += buffer.readableBytes();
+                index += buffer.readableBytes();
                 byte[] dst = new byte[buffer.readableBytes()];
                 buffer.readBytes(dst);
                 cb.rangePartiallyRead(Code.OK, dst);
             }
-            cb.rangeReadComplete(Code.OK, lastReadIndex);
+            cb.rangeReadComplete(Code.OK, index);
         }
     };
 
@@ -153,6 +154,7 @@ public class SequencerClient extends BasicClient {
                             exp.printStackTrace();
                         }
                         super.messageReceived(ctx, e);
+                        resumeBroadcastIfRangeReadIsComplete();
                     }
                 });
                 return pipeline;
@@ -183,41 +185,75 @@ public class SequencerClient extends BasicClient {
         final Channel loopbackChannel = connectFuture.awaitUninterruptibly().getChannel();
     }
 
+    //TODO: improvisation to cancel the effect of fake reads from backend
+    //remove it after implementing reading from a backend
+    long lastReadIndexFromBroadcaster;
+
     void readGapFromLogBackend(EndOfBroadcast msg) {
+        lastReadIndexFromBroadcaster = lastReadIndex;
         final long fromIndex = lastReadIndex + 1;
         //since during reading from backend, the gap expands, we conservatively read
         //all the persisted data from the backend and then continute reading the
         //rest from the broadcaster
         final long toIndex = msg.lastAvailableIndex;
         logBackendReader.readRange(
-                fromIndex,
-                toIndex,
-                new ReadRangeCallback() {
-                    @Override
-                    public void rangePartiallyRead(int rc, byte[] readData) {
-                        LOG.warn("rangePartiallyRead size: " + readData.length);
-                        //feed the readData to the pipeline
-                        try {
-                            loopbackDataProvider.write(readData, 0, readData.length);
-                        } catch (IOException e) {
-                            LOG.error("loopback pipeline is broken!");
-                            e.printStackTrace();
-                            System.exit(1);
-                            //TODO: handle properly
-                        }
+            fromIndex,
+            toIndex,
+            new ReadRangeCallback() {
+                @Override
+                public void rangePartiallyRead(int rc, byte[] readData) {
+                    LOG.warn("rangePartiallyRead size: " + readData.length);
+                    //feed the readData to the pipeline
+                    try {
+                        loopbackDataProvider.write(readData, 0, readData.length);
+                    } catch (IOException e) {
+                        LOG.error("loopback pipeline is broken!");
+                        e.printStackTrace();
+                        System.exit(1);
+                        //TODO: handle properly
                     }
-                    @Override
-                    public void rangeReadComplete(int rc, long lastReadIndex) {
-                        LOG.warn("rangeReadComplete " + lastReadIndex);
-                        //TODO: improvisation, remove it later
-                        //cancel the effect of reads
-                        SequencerClient.this.lastReadIndex = fromIndex - 1;
-                        resumeBroadcast();
+                }
+                @Override
+                public void rangeReadComplete(int rc, long lastReadIndex) {
+                    LOG.warn("rangeReadComplete " + lastReadIndex);
+                    try {
+                        loopbackDataProvider.flush();
+                    } catch (IOException e) {
+                        e.printStackTrace();
                     }
-                });
+                    setLastReadIndexFromBackend(lastReadIndex);
+                    resumeBroadcastIfRangeReadIsComplete();
+                }
+            });
+    }
+
+    /**
+     * This has to be synchronized since could be called concurrently by both
+     * (i) after servicing the last message
+     * (ii) after rangeReadComplete
+     * We need to invoke resume check after these two points since depends on 
+     * concurrency either could be run first
+     */
+    synchronized
+    void resumeBroadcastIfRangeReadIsComplete() {
+        //System.out.println("resumeBroadcastIfRangeReadIsComplete: " + lastReadIndex + " " + lastReadIndexFromBackend);
+        if (lastReadIndex == lastReadIndexFromBackend) {
+            lastReadIndexFromBackend = -1;//to cancel the next invocation of the method
+            resumeBroadcast();
+        }
+    }
+
+    long lastReadIndexFromBackend = -1;
+
+    synchronized
+    void setLastReadIndexFromBackend(long index) {
+        lastReadIndexFromBackend = index;
     }
 
     void resumeBroadcast() {
+        //TODO: improvisation, remove it later
+        //cancel the effect of reads
+        lastReadIndex = lastReadIndexFromBroadcaster;
         try {
             registerForBroadcast(lastReadIndex);
         } catch (IOException ioe) {
