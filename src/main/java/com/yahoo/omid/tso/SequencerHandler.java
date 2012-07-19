@@ -182,11 +182,11 @@ public class SequencerHandler extends SimpleChannelHandler {
                     return;
                 TSOSharedMessageBuffer._flushes++;
                 TSOSharedMessageBuffer._flSize += tail.readableBytes();
-                System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
-                //System.out.println("(" + schedulerControler == null ? "null" : schedulerControler.isCancelled() + ") " + "Braodcasting " + tail.readableBytes() + " from " + logReader);
+                //System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
                 channel.write(tail);
                 //TODO: this is for test, must be removed later
-                sendEOB(channel);
+                //sendEOB(channel);
+                //simulateFailure(channel);
             } catch (SharedLogLateFollowerException lateE) {
                 //TODO do something
                 lateE.printStackTrace();
@@ -209,6 +209,7 @@ public class SequencerHandler extends SimpleChannelHandler {
             return true;
         }
 
+        //in this version, we cleanly anounce the end of broadcast
         void sendEOB(Channel channel) {
             boolean result = stopBroadcastingTo(channel);
             //if we cannot stop broadcasting, sending EOB messes with semantics
@@ -221,6 +222,20 @@ public class SequencerHandler extends SimpleChannelHandler {
             buffer.writeByte(TSOMessage.EndOfBroadcast);
             eob.writeObject(buffer);
             channel.write(buffer);
+        }
+
+        //In this version, we close the channel to emulate a channel failure
+        void simulateFailure(Channel channel) {
+            boolean result = stopBroadcastingTo(channel);
+            //if we cannot stop broadcasting, sending EOB messes with semantics
+            if (!result)
+                return;
+            System.out.println("breaking the connection " + channel);
+            try {
+                channel.close();
+            } catch (Exception exp) {
+                exp.printStackTrace();
+            }
         }
     }
 

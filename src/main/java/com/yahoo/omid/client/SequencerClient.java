@@ -63,6 +63,7 @@ public class SequencerClient extends BasicClient {
     //needed to create TSOHandler
     TSOState tsoState;
     ChannelGroup channelGroup;
+    TSOHandler tsoHandler;
     PipedOutputStream loopbackDataProvider = null;
 
     long lastReadIndex = 0;
@@ -93,6 +94,8 @@ public class SequencerClient extends BasicClient {
         //the id does not matter here (=0)
         this.tsoState = tsoState;
         this.channelGroup = channelGroup;
+        this.tsoHandler = new TSOHandler(channelGroup, tsoState);
+        initLoopbackChannel();
         registerForBroadcast(lastReadIndex);
     }
 
@@ -106,33 +109,40 @@ public class SequencerClient extends BasicClient {
     }
 
     @Override
-    synchronized
-    public void channelConnected(ChannelHandlerContext ctx, ChannelStateEvent e) {
-        ctx.getChannel().getPipeline().remove("handler");
-        ctx.getChannel().getPipeline().addLast("handler", new TSOHandler(channelGroup, tsoState) {
-            @Override
-            public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
-                Object msg = e.getMessage();
-                if (msg instanceof EndOfBroadcast) {
-                    System.out.println(msg);
-                    readGapFromLogBackend((EndOfBroadcast)msg);
-                    //afterwards it resumes reading from the braodcaster
-                } else {
-                    TSOMessage tsoMsg = (TSOMessage) msg;
-                    try {
-                        lastReadIndex += tsoMsg.size();
-                    } catch (Exception exp) {
-                        LOG.error("Error in getting the size of a TSOMessage: " + tsoMsg + exp);
-                        exp.printStackTrace();
-                    }
-                    //System.out.println("servicing message " + tsoMsg);
-                    super.messageReceived(ctx, e);
-                }
-            }
+    public void channelClosed(ChannelHandlerContext ctx, ChannelStateEvent e)
+    throws Exception {
+        lastReadIndexFromBroadcaster = lastReadIndex;
+        resumeBroadcast();
+    }
 
-        });
-        initLoopbackChannel();
-        super.channelConnected(ctx, e);
+    /**
+     * When a message is received, handle it based on its type
+     */
+    @Override
+    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
+        Object msg = e.getMessage();
+        if (msg instanceof EndOfBroadcast) {
+            System.out.println(msg);
+            readGapFromLogBackend((EndOfBroadcast)msg);
+            //TODO: resume reading from the broadcaster concurrently
+            /**
+             * channel.setReadable(false);
+             * resumeBroadcast()
+             * and after reading from backend finishes ...
+             * channel.setReadable(true);
+             */
+            //afterwards it resumes reading from the braodcaster
+        } else {
+            TSOMessage tsoMsg = (TSOMessage) msg;
+            try {
+                lastReadIndex += tsoMsg.size();
+            } catch (Exception exp) {
+                LOG.error("Error in getting the size of a TSOMessage: " + tsoMsg + exp);
+                exp.printStackTrace();
+            }
+            //System.out.println("servicing message " + tsoMsg);
+            tsoHandler.messageReceived(ctx, e);
+        }
     }
 
     void initLoopbackChannel() {
@@ -260,15 +270,6 @@ public class SequencerClient extends BasicClient {
             ioe.printStackTrace();
             //TODO: handle properly
         }
-    }
-
-    /**
-     * When a message is received, handle it based on its type
-     */
-    @Override
-    public void messageReceived(ChannelHandlerContext ctx, MessageEvent e) {
-        LOG.error("Unexpected message recieved at SequencerClient: " + e.getMessage());
-        System.exit(1);
     }
 
     @Override
