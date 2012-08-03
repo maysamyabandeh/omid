@@ -34,4 +34,8 @@
     <name>tso.maxthread</name>
     <value>4</value>
   </property>
+  <property>
+    <name>zk</name>
+    <value>localhost:2181</value>
+  </property>
 </configuration>

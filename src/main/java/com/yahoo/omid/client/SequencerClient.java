@@ -66,7 +66,15 @@ public class SequencerClient extends BasicClient {
     TSOHandler tsoHandler;
     PipedOutputStream loopbackDataProvider = null;
 
+    /**
+     * TODO: this must be persisted.
+     * Perhaps we can encode it as part of each entry that we regularly write to WAL.
+     * This firstly reduce the WAL writing cost, and secondly make the recovery logic
+     * simpler: a broadcast message should be rerun if the sideeffect of its execution
+     * is not persisted.
+     */
     long lastReadIndex = 0;
+
     //for the moment use a dummy logBackendReader
     //it should be replaced by ManagedLedger when it is released
     LogBackendReader logBackendReader = new LogBackendReader() {

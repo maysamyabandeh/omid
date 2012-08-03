@@ -80,16 +80,18 @@ public class TransactionalTable extends HTable {
      * @throws IOException
      */
     public Result get(TransactionState transactionState, final Get get) throws IOException {
-        final long readTimestamp = transactionState.getStartTimestamp();
+        TransactionState.TxnPartitionState txnState =
+            (TransactionState.TxnPartitionState) transactionState.txnState;
+        final long readTimestamp = txnState.getStartTimestamp();
 
         if (IsolationLevel.checkForReadWriteConflicts)
-            transactionState.addReadRow(new RowKey(get.getRow(), getTableName()));
+            txnState.addReadRow(new RowKey(get.getRow(), getTableName()));
 
         final Get tsget = new Get(get.getRow());
         TimeRange timeRange = get.getTimeRange();
         final long NO_ELDEST = -1;//-1 means no eldest, i.e., do not worry about it
         final long eldest = IsolationLevel.checkForWriteWriteConflicts ? NO_ELDEST : 
-            transactionState.tsoclient.getEldest();//if we do not check for ww conflicts, we should take elders into account
+            txnState.tsoclient.getEldest();//if we do not check for ww conflicts, we should take elders into account
         int nVersions = (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD);
         long startTime = 0;
         long endTime = Math.min(timeRange.getMax(), readTimestamp + 1);
@@ -132,7 +134,9 @@ public class TransactionalTable extends HTable {
      * @throws IOException
      */
     public void delete(TransactionState transactionState, Delete delete) throws IOException {
-        final long startTimestamp = transactionState.getStartTimestamp();
+        TransactionState.TxnPartitionState txnState =
+            (TransactionState.TxnPartitionState) transactionState.txnState;
+        final long startTimestamp = txnState.getStartTimestamp();
         boolean issueGet = false;
 
         final Put deleteP = new Put(delete.getRow(), startTimestamp);
@@ -172,7 +176,7 @@ public class TransactionalTable extends HTable {
             }
         }
 
-        transactionState.addWrittenRow(new RowKeyFamily(delete.getRow(), getTableName(), deleteP.getFamilyMap()));
+        txnState.addWrittenRow(new RowKeyFamily(delete.getRow(), getTableName(), deleteP.getFamilyMap()));
 
         put(deleteP);
     }
@@ -185,7 +189,9 @@ public class TransactionalTable extends HTable {
      * @throws IOException
      */
     public void put(TransactionState transactionState, Put put) throws IOException, IllegalArgumentException {
-        final long startTimestamp = transactionState.getStartTimestamp();
+        TransactionState.TxnPartitionState txnState =
+            (TransactionState.TxnPartitionState) transactionState.txnState;
+        final long startTimestamp = txnState.getStartTimestamp();
         // create put with correct ts
         final Put tsput = new Put(put.getRow(), startTimestamp);
         Map<byte[], List<KeyValue>> kvs = put.getFamilyMap();
@@ -196,7 +202,7 @@ public class TransactionalTable extends HTable {
         }
 
         // should add the table as well
-        transactionState.addWrittenRow(new RowKeyFamily(tsput.getRow(), getTableName(), tsput.getFamilyMap()));
+        txnState.addWrittenRow(new RowKeyFamily(tsput.getRow(), getTableName(), tsput.getFamilyMap()));
 
         put(tsput);
     }
@@ -208,11 +214,13 @@ public class TransactionalTable extends HTable {
      * @throws IOException
      */
     public ResultScanner getScanner(TransactionState transactionState, Scan scan) throws IOException {
+        TransactionState.TxnPartitionState txnState =
+            (TransactionState.TxnPartitionState) transactionState.txnState;
         Scan tsscan = new Scan(scan);
         //      tsscan.setRetainDeletesInOutput(true);
         //      int maxVersions = scan.getMaxVersions();
         tsscan.setMaxVersions((int) (versionsAvg + CACHE_VERSIONS_OVERHEAD));
-        tsscan.setTimeRange(0, transactionState.getStartTimestamp() + 1);
+        tsscan.setTimeRange(0, txnState.getStartTimestamp() + 1);
         ClientScanner scanner = new ClientScanner(transactionState, tsscan, (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD));
         scanner.initialize();
         return scanner;
@@ -279,6 +287,8 @@ public class TransactionalTable extends HTable {
     //add the results to the filteredList, recurse if it is necessary
     private void filter(TransactionState state, Result unfilteredResult, long startTimestamp, int nMinVersionsAsked, 
             ArrayList<KeyValue> filteredList) throws IOException {
+        TransactionState.TxnPartitionState txnState =
+            (TransactionState.TxnPartitionState) state.txnState;
         Statistics.partialReport(Statistics.Tag.GET_PER_CLIENT_GET, 1);
         List<KeyValue> kvs = unfilteredResult == null ? null : unfilteredResult.list();
         if (unfilteredResult == null || kvs == null) {
@@ -333,7 +343,7 @@ public class TransactionalTable extends HTable {
             nextFetchMaxTimestamp = Math.min(nextFetchMaxTimestamp, Ts);
             if (!IsolationLevel.checkForWriteWriteConflicts) {
                 //Case 3: Check for failed elder
-                Long failedElderTc = state.tsoclient.failedElders.get(Ts);
+                Long failedElderTc = txnState.tsoclient.failedElders.get(Ts);
                 if (failedElderTc != null) {
                     if (failedElderTc < startTimestamp)//if it could be a valid read
                         mostRecentFailedElder.update(kv, failedElderTc);
@@ -342,7 +352,7 @@ public class TransactionalTable extends HTable {
             }
             if (mostRecentKeyValueWithLostTc != null) continue;//if it is an elder and we have already seen one 
             //with lost Tc, then it was in failedEdler as well.
-            long Tc = state.tsoclient.commitTimestamp(Ts, startTimestamp);
+            long Tc = txnState.tsoclient.commitTimestamp(Ts, startTimestamp);
             if (Tc == TSOClient.INVALID_READ) continue;//invalid read
             if (IsolationLevel.checkForWriteWriteConflicts) {//then everything is in order, and the first version is enough
                 addIfItIsNotADelete(kv, filteredList);
@@ -414,23 +424,27 @@ public class TransactionalTable extends HTable {
         public Result next() throws IOException {
             Result result;
             Result filteredResult;
+            TransactionState.TxnPartitionState txnState =
+                (TransactionState.TxnPartitionState) state.txnState;
             do {
                 result = super.next();
-                filteredResult = filter(state, result, state.getStartTimestamp(), maxVersions);
+                filteredResult = filter(state, result, txnState.getStartTimestamp(), maxVersions);
             } while(result != null && filteredResult == null);
             if (result != null) {
-                state.addReadRow(new RowKey(result.getRow(), getTableName()));
+                txnState.addReadRow(new RowKey(result.getRow(), getTableName()));
             }
             return filteredResult;
         }
 
         @Override
         public Result[] next(int nbRows) throws IOException {
+            TransactionState.TxnPartitionState txnState =
+                (TransactionState.TxnPartitionState) state.txnState;
             Result [] results = super.next(nbRows);
             for (int i = 0; i < results.length; i++) {
-                results[i] = filter(state, results[i], state.getStartTimestamp(), maxVersions);
+                results[i] = filter(state, results[i], txnState.getStartTimestamp(), maxVersions);
                 if (results[i] != null) {
-                    state.addReadRow(new RowKey(results[i].getRow(), getTableName()));
+                    txnState.addReadRow(new RowKey(results[i].getRow(), getTableName()));
                 }
             }
             return results;

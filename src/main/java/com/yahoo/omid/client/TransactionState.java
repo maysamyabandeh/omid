@@ -18,60 +18,115 @@ package com.yahoo.omid.client;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.Map;
+import java.util.NavigableMap;
 
 import com.yahoo.omid.tso.RowKey;
 
+//TODO: rename TransactionState to TxnStateRef
 public class TransactionState {
-    private long startTimestamp;
-    private long commitTimestamp;
-    private Set<RowKeyFamily> writtenRows;
-    private Set<RowKey> readRows;
+    TxnState txnState;
 
-    public TSOClient tsoclient;
-
-    TransactionState() {
-        startTimestamp = 0;
-        commitTimestamp = 0;
-        this.writtenRows = new HashSet<RowKeyFamily>();
-        this.readRows = new HashSet<RowKey>();
+    TransactionState(long ts, TSOClient tsoClient) {
+        txnState = new TxnPartitionState(ts, tsoClient);
     }
 
-    TransactionState(long startTimestamp, TSOClient client) {
-        this();
-        this.startTimestamp = startTimestamp;;
-        this.commitTimestamp = 0;
-        this.tsoclient = client;
+    /**
+     * The base class for txn state
+     */
+    abstract class TxnState {
+        public abstract boolean isGlobal();
     }
 
-    long getStartTimestamp() {
-        return startTimestamp;
+    /**
+     * The global state of the txn
+     */
+    class TxnGlobalState extends TxnState {
+        private NavigableMap<KeyRange,TxnPartitionState> partitions;
+
+        public TxnGlobalState() {
+        }
+
+        public TxnPartitionState getPartition(RowKey key) throws TransactionException {
+            KeyRange keyRange = new KeyRange(key);
+            Map.Entry<KeyRange,TxnPartitionState> entry = partitions.floorEntry(keyRange);
+            if (entry == null || !entry.getKey().includes(key)) {
+                throw new TransactionException("No partition is mapped to key " + key);
+            } else {
+                return entry.getValue();
+            }
+        }
+
+        @Override
+        public boolean isGlobal() {
+            return true;
+        }
     }
 
-    long getCommitTimestamp() {
-        return commitTimestamp;
-    }
+    /**
+     * The state of a transaction for a partition of status oracle
+     */
+    class TxnPartitionState extends TxnState {
+        private long startTimestamp;
+        private long commitTimestamp;
+        private Set<RowKeyFamily> writtenRows;
+        private Set<RowKey> readRows;
+        TSOClient tsoclient;
 
-    void setCommitTimestamp(long commitTimestamp) {
-        this.commitTimestamp = commitTimestamp;
-    }
+        TxnPartitionState() {
+            startTimestamp = 0;
+            commitTimestamp = 0;
+            this.writtenRows = new HashSet<RowKeyFamily>();
+            this.readRows = new HashSet<RowKey>();
+        }
 
-    RowKeyFamily[] getWrittenRows() {
-        return writtenRows.toArray(new RowKeyFamily[0]);
-    }
+        TxnPartitionState(long startTimestamp, TSOClient client) {
+            this();
+            this.startTimestamp = startTimestamp;;
+            this.commitTimestamp = 0;
+            this.tsoclient = client;
+        }
 
-    void addWrittenRow(RowKeyFamily row) {
-        writtenRows.add(row);
-    }
+        long getStartTimestamp() {
+            return startTimestamp;
+        }
 
-    RowKey[] getReadRows() {
-        return readRows.toArray(new RowKey[0]);
-    }
+        long getCommitTimestamp() {
+            return commitTimestamp;
+        }
 
-    void addReadRow(RowKey row) {
-        readRows.add(row);
-    }
+        void setStartTimestamp(long startTimestamp) {
+            this.startTimestamp = startTimestamp;
+        }
 
-    public String toString() {
-        return "Transaction-" + Long.toHexString(startTimestamp);
+        void setCommitTimestamp(long commitTimestamp) {
+            this.commitTimestamp = commitTimestamp;
+        }
+
+        RowKeyFamily[] getWrittenRows() {
+            return writtenRows.toArray(new RowKeyFamily[0]);
+        }
+
+        void addWrittenRow(RowKeyFamily row) {
+            writtenRows.add(row);
+        }
+
+        RowKey[] getReadRows() {
+            return readRows.toArray(new RowKey[0]);
+        }
+
+        void addReadRow(RowKey row) {
+            readRows.add(row);
+        }
+
+        @Override
+        public String toString() {
+            return "TxnPartitionState-" + Long.toHexString(startTimestamp);
+        }
+
+        @Override
+        public boolean isGlobal() {
+            return true;
+        }
     }
 }

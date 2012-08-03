@@ -92,6 +92,8 @@ initzk() {
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0 b ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/ip localhost ;
     java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/port 1234 ;
+    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/start aaaa ;
+    #java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/end zzzz ;
 }
 
 

@@ -46,6 +46,13 @@ public class OmidConfiguration extends Configuration {
         return sequencerConf;
     }
 
+    public void loadServerConfs() {
+        String zkServers = this.get("zk");
+        if (zkServers == null)
+            System.err.println("zk is not found in omid-site.xml");
+        loadServerConfs(zkServers);
+    }
+
     /**
      * Load from zk the configuration for connecting to SOs and the sequencer
      */
@@ -83,11 +90,24 @@ public class OmidConfiguration extends Configuration {
                 host = new String(tmp);
                 tmp = zk.getData("/sos/" + soId + "/port", false, null);
                 port = new String(tmp);
-                System.out.println(host + " " + port);
-
+                //the supporting range start and end
+                String start = null, end = null;
+                if (zk.exists("/sos/" + soId + "/start", false) != null) {
+                    tmp = zk.getData("/sos/" + soId + "/start", false, null);
+                    start = new String(tmp);
+                }
+                if (zk.exists("/sos/" + soId + "/end", false) != null) {
+                    tmp = zk.getData("/sos/" + soId + "/end", false, null);
+                    end = new String(tmp);
+                }
+                System.out.println(host + " " + port + " " + start + " " + end);
                 soConfs[i] = new Properties();
                 soConfs[i].setProperty("tso.host", host);
                 soConfs[i].setProperty("tso.port", port);
+                if (start != null)
+                    soConfs[i].setProperty("tso.start", start);
+                if (end != null)
+                    soConfs[i].setProperty("tso.end", end);
                 soConfs[i].setProperty("tso.executor.threads", "10");
             }
         } catch (Exception e) {

@@ -166,7 +166,7 @@ public class SimClient {
     public SimClient(Properties[] soConfs, Properties sequencerConf, int index) throws IOException {
         try {
             latch = new CountDownLatch(1 + soConfs.length);
-            int id = generateUniqueId(index);
+            int id = BasicClient.generateUniqueId(index);
             AtomicLong sequenceGenerator = new AtomicLong();
             sequencerClient = new SimSequencerClient(sequencerConf, id, sequenceGenerator);
             tsoClients = new SimTSOClient[soConfs.length];
@@ -175,22 +175,6 @@ public class SimClient {
         } catch (IOException e) {
             latch = new CountDownLatch(0);
         }
-    }
-
-    int generateUniqueId(int i) {
-        int id = 0;
-        try {
-            InetAddress thisIp = InetAddress.getLocalHost();
-            id = thisIp.hashCode();
-            id = id * (i+1);//avoid i = 0
-            LOG.warn("Generate Id: " + id);
-            return id;
-        } catch (UnknownHostException e) {
-            LOG.error("Error in generating the unique id" + e);
-            e.printStackTrace();
-            System.exit(1);
-        }
-        return id;
     }
 
     class SimSequencerClient extends SimTSOClient {

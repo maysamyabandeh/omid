@@ -184,12 +184,9 @@ public class SequencerHandler extends SimpleChannelHandler {
                 TSOSharedMessageBuffer._flSize += tail.readableBytes();
                 //System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
                 channel.write(tail);
-                //TODO: this is for test, must be removed later
-                //sendEOB(channel);
-                //simulateFailure(channel);
             } catch (SharedLogLateFollowerException lateE) {
-                //TODO do something
-                lateE.printStackTrace();
+                //lateE.printStackTrace();
+                sendEOB(channel);
             } catch (SharedLogException sharedE) {
                 //TODO do something
                 sharedE.printStackTrace();

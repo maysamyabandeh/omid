@@ -32,6 +32,8 @@ import java.util.TimerTask;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -367,6 +369,31 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
             o.error(e);
             o = queuedOps.poll();
         }
+    }
+
+    static protected int generateUniqueId() {
+        java.util.Random rnd;
+        long seed = System.currentTimeMillis();
+        seed *= Thread.currentThread().getId();// to make it thread dependent
+        rnd = new java.util.Random(seed);
+        int rndInt = rnd.nextInt();
+        return generateUniqueId(rndInt);
+    }
+
+    static protected int generateUniqueId(int i) {
+        int id = 0;
+        try {
+            InetAddress thisIp = InetAddress.getLocalHost();
+            id = thisIp.hashCode();
+            id = id * (i+1);//avoid i = 0
+            LOG.warn("Generate Id: " + id);
+            return id;
+        } catch (UnknownHostException e) {
+            LOG.error("Error in generating the unique id" + e);
+            e.printStackTrace();
+            System.exit(1);
+        }
+        return id;
     }
 
     @Override

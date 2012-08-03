@@ -48,6 +48,12 @@ public class RowKey implements Comparable<RowKey> {
         return rowId;
     }
 
+    public byte[] getByteArray() {
+        byte[] key = Arrays.copyOf(tableId, tableId.length + rowId.length);
+        System.arraycopy(rowId, 0, key, tableId.length, rowId.length);
+        return key;
+    }
+
     public String toString() {
         return new String(tableId) + ":" + new String(rowId);
     }
