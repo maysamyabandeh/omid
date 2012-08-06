@@ -99,6 +99,12 @@ public class TransactionManager {
         tableCache = new HashMap<byte[], HTable>();
     }
 
+    boolean lastLocalTxnFailed = true;
+
+    void reportFailedPartitioning() {
+        lastLocalTxnFailed = true;
+    }
+
     /**
      * Starts a new transaction.
      * 
@@ -109,6 +115,10 @@ public class TransactionManager {
      * @throws TransactionException
      */
     public TransactionState beginTransaction() throws TransactionException {
+        if (lastLocalTxnFailed) {
+            lastLocalTxnFailed = false;
+            return beginGlobalTransaction();
+        }
         Map.Entry<KeyRange,TSOClient> entry = selectAPartition();
         TSOClient tsoclient = entry.getValue();
         KeyRange keyRange = entry.getKey();
@@ -125,7 +135,7 @@ public class TransactionManager {
 
         TimestampResponse pong = cb.getPong();
         tsoclient.aborted.aTxnStarted(pong.timestamp);
-        return new TransactionState(pong.timestamp, tsoclient, keyRange);
+        return new TransactionState(pong.timestamp, tsoclient, keyRange, this);
     }
 
     /**
@@ -145,7 +155,7 @@ public class TransactionManager {
      * start a global transaction
      * update the content of transactionState accordingly
      */
-    public TransactionState beginGlobalTransaction(TransactionState transactionState) throws TransactionException {
+    public TransactionState beginGlobalTransaction() throws TransactionException {
         boolean failed = false;
         long sequence;
         PingPongCallback<TimestampResponse>[] tscbs;
@@ -179,8 +189,7 @@ public class TransactionManager {
             i++;
         }
 
-        transactionState.convertToGlobalTxn(sequence, ts, sortedRangeClientMap);
-        return transactionState;
+        return new TransactionState(sequence, ts, sortedRangeClientMap, this);
     }
 
     /**
@@ -193,6 +202,10 @@ public class TransactionManager {
      */
     public void tryCommit(TransactionState transactionState)
         throws CommitUnsuccessfulException, TransactionException {
+        if (transactionState.txnState.isGlobal()) {
+            tryGlobalCommit(transactionState);
+            return;
+        }
         TxnPartitionState txnState =
             (TxnPartitionState) transactionState.txnState;
         TSOClient tsoclient = txnState.tsoclient;
@@ -343,6 +356,11 @@ public class TransactionManager {
      * @throws TransactionException
      */
     public void abort(TransactionState transactionState) throws TransactionException {
+        if (transactionState.txnState.isGlobal()) {
+            LOG.error("local aborting of a global transaction!");
+            //tryGlobalAbort(transactionState);
+            return;
+        }
         TxnPartitionState txnState =
             (TxnPartitionState) transactionState.txnState;
         TSOClient tsoclient = txnState.tsoclient;

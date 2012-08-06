@@ -277,7 +277,7 @@ public class TransactionalTable extends HTable {
      * must be read and mapped to Tc since Ts and Tc orders are not the same.
      */
     private Result filter(TransactionState state, Result unfilteredResult, long startTimestamp, int nMinVersionsAsked) 
-        throws IOException {
+        throws IOException, TransactionException {
         ArrayList<KeyValue> filteredList = new ArrayList<KeyValue>();
         filter(state, unfilteredResult, startTimestamp, nMinVersionsAsked, filteredList);
         if (filteredList.isEmpty())//Some functions (like the scanner) expect null if the results is empty!
@@ -286,10 +286,10 @@ public class TransactionalTable extends HTable {
     }
 
     //add the results to the filteredList, recurse if it is necessary
-    private void filter(TransactionState state, Result unfilteredResult, long startTimestamp, int nMinVersionsAsked, 
-            ArrayList<KeyValue> filteredList) throws IOException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) state.txnState;
+    private void filter(TransactionState transactionState, 
+            Result unfilteredResult, long startTimestamp, int nMinVersionsAsked, 
+            ArrayList<KeyValue> filteredList) 
+        throws IOException, TransactionException {
         Statistics.partialReport(Statistics.Tag.GET_PER_CLIENT_GET, 1);
         List<KeyValue> kvs = unfilteredResult == null ? null : unfilteredResult.list();
         if (unfilteredResult == null || kvs == null) {
@@ -320,7 +320,8 @@ public class TransactionalTable extends HTable {
                     continue;
                 if (!sameColumn) {//column is changed
                     if (!pickedOneForLastColumn) //then process the results of the last column
-                        pickTheRightVersion(filteredList, state, startTimestamp, nVersionsRead, nMinVersionsAsked, 
+                        pickTheRightVersion(filteredList, transactionState, startTimestamp, 
+                                nVersionsRead, nMinVersionsAsked, 
                                 lastkv, nextFetchMaxTimestamp, mostRecentValueWithTc, 
                                 mostRecentKeyValueWithLostTc, mostRecentFailedElder);
                     //reset column-dependent variables
@@ -342,6 +343,8 @@ public class TransactionalTable extends HTable {
                 pickedOneForLastColumn = true;
             }
             nextFetchMaxTimestamp = Math.min(nextFetchMaxTimestamp, Ts);
+            RowKey rowKey = new RowKey(kv.getRow(), getTableName());
+            TxnPartitionState txnState = transactionState.getPartition(rowKey);
             if (!IsolationLevel.checkForWriteWriteConflicts) {
                 //Case 3: Check for failed elder
                 Long failedElderTc = txnState.tsoclient.failedElders.get(Ts);
@@ -369,16 +372,20 @@ public class TransactionalTable extends HTable {
                 mostRecentValueWithTc.update(kv, Tc); //some kv might be from elders
         }
         if (!pickedOneForLastColumn)
-            pickTheRightVersion(filteredList, state, startTimestamp, nVersionsRead, nMinVersionsAsked, 
+            pickTheRightVersion(filteredList, transactionState, 
+                    startTimestamp, nVersionsRead, nMinVersionsAsked, 
                     lastkv, nextFetchMaxTimestamp, mostRecentValueWithTc, 
                     mostRecentKeyValueWithLostTc, mostRecentFailedElder);
     }
 
     //Having processed the versions related to a column, decide which version should be added to the filteredList
-    void pickTheRightVersion(ArrayList<KeyValue> filteredList, TransactionState state, long startTimestamp, 
+    void pickTheRightVersion(ArrayList<KeyValue> filteredList, 
+            TransactionState state, long startTimestamp, 
             int nVersionsRead, int nMinVersionsAsked, 
-            KeyValue lastkv, long nextFetchMaxTimestamp, KeyValueTc mostRecentValueWithTc, 
-            KeyValue mostRecentKeyValueWithLostTc, KeyValueTc mostRecentFailedElder) throws IOException {
+            KeyValue lastkv, long nextFetchMaxTimestamp, 
+            KeyValueTc mostRecentValueWithTc, 
+            KeyValue mostRecentKeyValueWithLostTc, KeyValueTc mostRecentFailedElder) 
+        throws IOException, TransactionException {
         if (mostRecentValueWithTc.isMoreRecentThan(mostRecentFailedElder)) {
             addIfItIsNotADelete(mostRecentValueWithTc.kv, filteredList);
             return;
@@ -432,7 +439,13 @@ public class TransactionalTable extends HTable {
             Result filteredResult;
             do {
                 result = super.next();
+                try {
                 filteredResult = filter(state, result, startTimestamp, maxVersions);
+                } catch (InvalidTxnPartitionException e) {
+                    throw new IOException("Scan crosses the partition boundry");
+                } catch (TransactionException e) {
+                    throw new IOException(e);
+                }
             } while (result != null && filteredResult == null);
             if (result != null) {
                 RowKey rowKey = new RowKey(result.getRow(), getTableName());
@@ -449,7 +462,13 @@ public class TransactionalTable extends HTable {
         public Result[] next(int nbRows) throws IOException {
             Result [] results = super.next(nbRows);
             for (int i = 0; i < results.length; i++) {
+                try {
                 results[i] = filter(state, results[i], startTimestamp, maxVersions);
+                } catch (InvalidTxnPartitionException e) {
+                    throw new IOException("Scan crosses the partition boundry");
+                } catch (TransactionException e) {
+                    throw new IOException(e);
+                }
                 if (results[i] != null) {
                     RowKey rowKey = new RowKey(results[i].getRow(), getTableName());
                     if (scanPartitionState.covers(rowKey))

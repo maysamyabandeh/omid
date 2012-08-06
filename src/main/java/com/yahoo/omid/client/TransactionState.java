@@ -28,14 +28,19 @@ import com.yahoo.omid.IsolationLevel;
 //TODO: rename TransactionState to TxnStateRef
 public class TransactionState {
     TxnState txnState;
+    TransactionManager txnManager;
 
-    TransactionState(long ts, TSOClient tsoClient, KeyRange keyRange) {
+    TransactionState(long ts, TSOClient tsoClient, KeyRange keyRange, 
+            TransactionManager txnManager) {
         txnState = new TxnPartitionState(ts, tsoClient, keyRange);
+        this.txnManager = txnManager;
     }
 
-    void convertToGlobalTxn(long sequence, long[] vts, 
-            TreeMap<KeyRange,TSOClient> sortedRangeClientMap) {
+    TransactionState(long sequence, long[] vts, 
+            TreeMap<KeyRange,TSOClient> sortedRangeClientMap,
+            TransactionManager txnManager) {
         txnState = new TxnGlobalState(sequence, vts, sortedRangeClientMap);
+        this.txnManager = txnManager;
     }
 
     public TxnPartitionState getPartition()
@@ -46,8 +51,10 @@ public class TransactionState {
     public TxnPartitionState getPartition(RowKey rowKey)
         throws TransactionException {
         TxnPartitionState tps = txnState.getPartition(rowKey);
-        if (tps == null)
+        if (tps == null) {
+            txnManager.reportFailedPartitioning();
             throw new InvalidTxnPartitionException("Need to start a global transaction");
+        }
         return tps;
     }
 
@@ -131,6 +138,7 @@ public class TransactionState {
             throws TransactionException {
             if (key == null || keyRange.includes(key))
                 return this;
+            System.out.println("Wrong partition");
             return null;//indicating that the current partition does not cover key
         }
 
@@ -179,7 +187,7 @@ public class TransactionState {
 
         @Override
         public boolean isGlobal() {
-            return true;
+            return false;
         }
     }
 }

@@ -173,6 +173,9 @@ public class TSOHandler extends SimpleChannelHandler {
         } else if (msg instanceof FullAbortReport) {
             handle((FullAbortReport) msg, channel);
             return;
+        } else if (msg instanceof AbortRequest) {
+            handle((AbortRequest) msg, channel);
+            return;
         } else if (msg instanceof PeerIdAnnoncement) {
             handle((PeerIdAnnoncement) msg, channel);
             return;
