@@ -44,6 +44,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.Statistics;
 import com.yahoo.omid.IsolationLevel;
+import com.yahoo.omid.client.TransactionState.TxnPartitionState;
 
 /**
  * Provides transactional methods for accessing and modifying a given snapshot of data identified by an opaque
@@ -79,13 +80,13 @@ public class TransactionalTable extends HTable {
      * @see HTable#get(Get)
      * @throws IOException
      */
-    public Result get(TransactionState transactionState, final Get get) throws IOException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+    public Result get(TransactionState transactionState, final Get get) throws IOException, TransactionException {
+        RowKey rowKey = new RowKey(get.getRow(), getTableName());
+        TxnPartitionState txnState = transactionState.getPartition(rowKey);
         final long readTimestamp = txnState.getStartTimestamp();
 
         if (IsolationLevel.checkForReadWriteConflicts)
-            txnState.addReadRow(new RowKey(get.getRow(), getTableName()));
+            txnState.addReadRow(rowKey);
 
         final Get tsget = new Get(get.getRow());
         TimeRange timeRange = get.getTimeRange();
@@ -133,9 +134,9 @@ public class TransactionalTable extends HTable {
      * @see HTable#delete(Delete)
      * @throws IOException
      */
-    public void delete(TransactionState transactionState, Delete delete) throws IOException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+    public void delete(TransactionState transactionState, Delete delete) throws IOException, TransactionException {
+        RowKey rowKey = new RowKey(delete.getRow(), getTableName());
+        TxnPartitionState txnState = transactionState.getPartition(rowKey);
         final long startTimestamp = txnState.getStartTimestamp();
         boolean issueGet = false;
 
@@ -188,9 +189,9 @@ public class TransactionalTable extends HTable {
      * @see HTable#put(Put)
      * @throws IOException
      */
-    public void put(TransactionState transactionState, Put put) throws IOException, IllegalArgumentException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+    public void put(TransactionState transactionState, Put put) throws IOException, IllegalArgumentException, TransactionException {
+        RowKey rowKey = new RowKey(put.getRow(), getTableName());
+        TxnPartitionState txnState = transactionState.getPartition(rowKey);
         final long startTimestamp = txnState.getStartTimestamp();
         // create put with correct ts
         final Put tsput = new Put(put.getRow(), startTimestamp);
@@ -213,15 +214,15 @@ public class TransactionalTable extends HTable {
      * @see HTable#getScanner(Scan)
      * @throws IOException
      */
-    public ResultScanner getScanner(TransactionState transactionState, Scan scan) throws IOException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+    public ResultScanner getScanner(TransactionState transactionState, Scan scan) throws IOException, TransactionException {
+        //TODO: extend it to scans that span multiple partitions
+        TxnPartitionState scanPartitionState = transactionState.getPartition();
         Scan tsscan = new Scan(scan);
         //      tsscan.setRetainDeletesInOutput(true);
         //      int maxVersions = scan.getMaxVersions();
         tsscan.setMaxVersions((int) (versionsAvg + CACHE_VERSIONS_OVERHEAD));
-        tsscan.setTimeRange(0, txnState.getStartTimestamp() + 1);
-        ClientScanner scanner = new ClientScanner(transactionState, tsscan, (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD));
+        tsscan.setTimeRange(0, scanPartitionState.getStartTimestamp() + 1);
+        ClientScanner scanner = new ClientScanner(transactionState, tsscan, (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD), scanPartitionState);
         scanner.initialize();
         return scanner;
     }
@@ -413,38 +414,49 @@ public class TransactionalTable extends HTable {
     protected class ClientScanner extends HTable.ClientScanner {
         private TransactionState state;
         private int maxVersions;
+        private TxnPartitionState scanPartitionState;
+        private long startTimestamp;
 
-        ClientScanner(TransactionState state, Scan scan, int maxVersions) {
+        ClientScanner(TransactionState state, Scan scan, int maxVersions,
+                TxnPartitionState scanPartitionState) {
             super(scan);
             this.state = state;
             this.maxVersions = maxVersions;
+            this.scanPartitionState = scanPartitionState;
+            this.startTimestamp = scanPartitionState.getStartTimestamp();
         }
 
         @Override
         public Result next() throws IOException {
             Result result;
             Result filteredResult;
-            TransactionState.TxnPartitionState txnState =
-                (TransactionState.TxnPartitionState) state.txnState;
             do {
                 result = super.next();
-                filteredResult = filter(state, result, txnState.getStartTimestamp(), maxVersions);
-            } while(result != null && filteredResult == null);
+                filteredResult = filter(state, result, startTimestamp, maxVersions);
+            } while (result != null && filteredResult == null);
             if (result != null) {
-                txnState.addReadRow(new RowKey(result.getRow(), getTableName()));
+                RowKey rowKey = new RowKey(result.getRow(), getTableName());
+                if (scanPartitionState.covers(rowKey))
+                    scanPartitionState.addReadRow(rowKey);
+                else
+                    throw new IOException("Scan crosses the partition boundry");
+                //TODO: support cross partition scans
             }
             return filteredResult;
         }
 
         @Override
         public Result[] next(int nbRows) throws IOException {
-            TransactionState.TxnPartitionState txnState =
-                (TransactionState.TxnPartitionState) state.txnState;
             Result [] results = super.next(nbRows);
             for (int i = 0; i < results.length; i++) {
-                results[i] = filter(state, results[i], txnState.getStartTimestamp(), maxVersions);
+                results[i] = filter(state, results[i], startTimestamp, maxVersions);
                 if (results[i] != null) {
-                    txnState.addReadRow(new RowKey(results[i].getRow(), getTableName()));
+                    RowKey rowKey = new RowKey(results[i].getRow(), getTableName());
+                    if (scanPartitionState.covers(rowKey))
+                        scanPartitionState.addReadRow(rowKey);
+                    else
+                        throw new IOException("Scan crosses the partition boundry");
+                    //TODO: support cross partition scans
                 }
             }
             return results;

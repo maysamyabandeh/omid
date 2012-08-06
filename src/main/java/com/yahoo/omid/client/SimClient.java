@@ -589,9 +589,6 @@ while (curMessage > 0) {
 
     //static int slowchance = -1;
 
-    private void startGlobalTransaction() {
-    }
-
     /**
      * Main class for Client taking from two to more arguments<br>
      * @param args

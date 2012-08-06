@@ -20,41 +20,87 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.TreeMap;
 
 import com.yahoo.omid.tso.RowKey;
+import com.yahoo.omid.IsolationLevel;
 
 //TODO: rename TransactionState to TxnStateRef
 public class TransactionState {
     TxnState txnState;
 
-    TransactionState(long ts, TSOClient tsoClient) {
-        txnState = new TxnPartitionState(ts, tsoClient);
+    TransactionState(long ts, TSOClient tsoClient, KeyRange keyRange) {
+        txnState = new TxnPartitionState(ts, tsoClient, keyRange);
+    }
+
+    void convertToGlobalTxn(long sequence, long[] vts, 
+            TreeMap<KeyRange,TSOClient> sortedRangeClientMap) {
+        txnState = new TxnGlobalState(sequence, vts, sortedRangeClientMap);
+    }
+
+    public TxnPartitionState getPartition()
+        throws TransactionException {
+        return getPartition(null);
+    }
+
+    public TxnPartitionState getPartition(RowKey rowKey)
+        throws TransactionException {
+        TxnPartitionState tps = txnState.getPartition(rowKey);
+        if (tps == null)
+            throw new InvalidTxnPartitionException("Need to start a global transaction");
+        return tps;
     }
 
     /**
      * The base class for txn state
      */
-    abstract class TxnState {
+    static abstract class TxnState {
         public abstract boolean isGlobal();
+        public abstract TxnPartitionState getPartition(final RowKey rowKey) 
+            throws TransactionException;
     }
 
     /**
      * The global state of the txn
      */
-    class TxnGlobalState extends TxnState {
+    static class TxnGlobalState extends TxnState {
         private NavigableMap<KeyRange,TxnPartitionState> partitions;
+        private long sequence;
+        long[] vts;
 
-        public TxnGlobalState() {
+        public TxnGlobalState(long sequence, long[] vts, TreeMap<KeyRange,TSOClient> sortedRangeClientMap) {
+            this.sequence = sequence;
+            this.vts = vts;
+            partitions = new TreeMap();
+            int i = 0;
+            for (Map.Entry<KeyRange,TSOClient> entry: sortedRangeClientMap.entrySet()) {
+                TxnPartitionState pstate = 
+                    new TxnPartitionState(vts[i], entry.getValue(), entry.getKey());
+                partitions.put(entry.getKey(), pstate);
+                i++;
+            }
         }
 
-        public TxnPartitionState getPartition(RowKey key) throws TransactionException {
-            KeyRange keyRange = new KeyRange(key);
-            Map.Entry<KeyRange,TxnPartitionState> entry = partitions.floorEntry(keyRange);
-            if (entry == null || !entry.getKey().includes(key)) {
-                throw new TransactionException("No partition is mapped to key " + key);
+        public long getSequence() {
+            return sequence;
+        }
+
+        public NavigableMap<KeyRange,TxnPartitionState> getPartitions() {
+            return partitions;
+        }
+
+        public TxnPartitionState getPartition(final RowKey key)
+            throws TransactionException {
+            Map.Entry<KeyRange,TxnPartitionState> entry;
+            if (key == null) {
+                entry = partitions.firstEntry();
             } else {
-                return entry.getValue();
+                KeyRange keyRange = new KeyRange(key);
+                entry = partitions.floorEntry(keyRange);
+                if (entry == null || !entry.getKey().includes(key))
+                    throw new TransactionException("No partition is mapped to key " + key);
             }
+            return entry.getValue();
         }
 
         @Override
@@ -66,25 +112,30 @@ public class TransactionState {
     /**
      * The state of a transaction for a partition of status oracle
      */
-    class TxnPartitionState extends TxnState {
+    static class TxnPartitionState extends TxnState {
+        private KeyRange keyRange; //the range covered by this partition
         private long startTimestamp;
         private long commitTimestamp;
-        private Set<RowKeyFamily> writtenRows;
-        private Set<RowKey> readRows;
+        private Set<RowKeyFamily> writtenRows = new HashSet<RowKeyFamily>();
+        private Set<RowKey> readRows = new HashSet<RowKey>();
         TSOClient tsoclient;
 
-        TxnPartitionState() {
-            startTimestamp = 0;
-            commitTimestamp = 0;
-            this.writtenRows = new HashSet<RowKeyFamily>();
-            this.readRows = new HashSet<RowKey>();
-        }
-
-        TxnPartitionState(long startTimestamp, TSOClient client) {
-            this();
+        TxnPartitionState(long startTimestamp, TSOClient client, KeyRange keyRange) {
             this.startTimestamp = startTimestamp;;
             this.commitTimestamp = 0;
             this.tsoclient = client;
+            this.keyRange = keyRange;
+        }
+
+        public TxnPartitionState getPartition(final RowKey key)
+            throws TransactionException {
+            if (key == null || keyRange.includes(key))
+                return this;
+            return null;//indicating that the current partition does not cover key
+        }
+
+        public boolean covers(RowKey rowKey) {
+            return keyRange.includes(rowKey);
         }
 
         long getStartTimestamp() {
@@ -116,7 +167,9 @@ public class TransactionState {
         }
 
         void addReadRow(RowKey row) {
-            readRows.add(row);
+            //It is not necessary to keep track of read rows if we do not check for rw
+            if (IsolationLevel.checkForReadWriteConflicts)
+                readRows.add(row);
         }
 
         @Override

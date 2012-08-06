@@ -17,8 +17,13 @@
 package com.yahoo.omid.client;
 
 import com.yahoo.omid.tso.RowKey;
+import com.yahoo.omid.client.TransactionState.TxnPartitionState;
+import com.yahoo.omid.client.TransactionState.TxnGlobalState;
+import com.yahoo.omid.tso.messages.MultiCommitRequest;
 import com.yahoo.omid.tso.messages.CommitRequest;
 import com.yahoo.omid.tso.messages.CommitResponse;
+import com.yahoo.omid.tso.messages.PrepareResponse;
+import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.Statistics;
 import com.yahoo.omid.OmidConfiguration;
@@ -54,6 +59,8 @@ public class TransactionManager {
     private Configuration conf;
     private HashMap<byte[], HTable> tableCache;
     private static TreeMap<KeyRange,TSOClient> sortedRangeClientMap = null;
+    private static TSOClient sequencerClient;
+    AtomicLong sequenceGenerator = new AtomicLong();
 
     public TransactionManager(Configuration conf) 
         throws TransactionException, IOException {
@@ -75,10 +82,11 @@ public class TransactionManager {
                     }
                     sortedRangeClientMap = new TreeMap<KeyRange,TSOClient>();
                     int i = 0;
-                    AtomicLong sequenceGenerator = new AtomicLong();
                     int id = BasicClient.generateUniqueId();
+                    boolean introduceYourself = true;
+                    sequencerClient = new TSOClient(omidConf.getSequencerConf(), id, !introduceYourself, sequenceGenerator);
                     for (Map.Entry<KeyRange,Properties> entry: sortedRangePropMap.entrySet()) {
-                        TSOClient handler = new TSOClient(entry.getValue(), id, true, sequenceGenerator);
+                        TSOClient handler = new TSOClient(entry.getValue(), id, introduceYourself, sequenceGenerator);
                         sortedRangeClientMap.put(entry.getKey(), handler);
                         i++;
                     }
@@ -101,7 +109,9 @@ public class TransactionManager {
      * @throws TransactionException
      */
     public TransactionState beginTransaction() throws TransactionException {
-        TSOClient tsoclient = selectAPartition();
+        Map.Entry<KeyRange,TSOClient> entry = selectAPartition();
+        TSOClient tsoclient = entry.getValue();
+        KeyRange keyRange = entry.getKey();
         PingPongCallback<TimestampResponse> cb = new PingPongCallback<TimestampResponse>();
         try {
             tsoclient.getNewTimestamp(cb);
@@ -115,20 +125,62 @@ public class TransactionManager {
 
         TimestampResponse pong = cb.getPong();
         tsoclient.aborted.aTxnStarted(pong.timestamp);
-        return new TransactionState(pong.timestamp, tsoclient);
+        return new TransactionState(pong.timestamp, tsoclient, keyRange);
     }
 
     /**
      * This method implement the policy to choose a partition for the transaction
      * @return the TSOClient that is the interface to the selected partition
      */
-    protected TSOClient selectAPartition() {
-        TSOClient chosen = null;
+    protected Map.Entry<KeyRange,TSOClient> selectAPartition() {
+        Map.Entry<KeyRange,TSOClient> chosen = null;
         for (Map.Entry<KeyRange,TSOClient> entry: sortedRangeClientMap.entrySet()) {
-            chosen = entry.getValue();
+            chosen = entry;
             break;
         }
         return chosen;
+    }
+
+    /**
+     * start a global transaction
+     * update the content of transactionState accordingly
+     */
+    public TransactionState beginGlobalTransaction(TransactionState transactionState) throws TransactionException {
+        boolean failed = false;
+        long sequence;
+        PingPongCallback<TimestampResponse>[] tscbs;
+        try {
+            tscbs = new PingPongCallback[sortedRangeClientMap.size()];
+            sequence = sequenceGenerator.getAndIncrement();
+            int i = 0;
+            for (TSOClient tsoClient: sortedRangeClientMap.values()) {
+                tscbs[i] = tsoClient.registerTimestampCallback(sequence);
+                i++;
+            }
+            boolean readonly = false;
+            sequencerClient.getNewIndirectTimestamp(sequence, readonly);
+            for (i = 0; i < sortedRangeClientMap.size(); i++) {
+                tscbs[i].await();
+                if (tscbs[i].getException() != null)
+                    failed = true;
+            }
+        } catch (Exception e) {
+            throw new TransactionException("Could not get new timestamp", e);
+        }
+        if (failed)
+            throw new TransactionException("Error retrieving timestamp for a global transaction", null);
+        //keep track of started transactions
+        long[] ts = new long[tscbs.length];
+        for (int i = 0; i < tscbs.length; i++)
+            ts[i] = tscbs[i].getPong().timestamp;
+        int i = 0;
+        for (TSOClient tsoClient: sortedRangeClientMap.values()) {
+            tsoClient.aborted.aTxnStarted(ts[i]);
+            i++;
+        }
+
+        transactionState.convertToGlobalTxn(sequence, ts, sortedRangeClientMap);
+        return transactionState;
     }
 
     /**
@@ -141,8 +193,8 @@ public class TransactionManager {
      */
     public void tryCommit(TransactionState transactionState)
         throws CommitUnsuccessfulException, TransactionException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+        TxnPartitionState txnState =
+            (TxnPartitionState) transactionState.txnState;
         TSOClient tsoclient = txnState.tsoclient;
         Statistics.fullReport(Statistics.Tag.COMMIT, 1);
         if (LOG.isTraceEnabled()) {
@@ -172,17 +224,114 @@ public class TransactionManager {
         tsoclient.aborted.aTxnFinished(txnState.getStartTimestamp());
 
         if (!pong.committed) {
-            cleanup(transactionState);
+            cleanup(txnState);
             throw new CommitUnsuccessfulException();
         }
         txnState.setCommitTimestamp(pong.commitTimestamp);
         if (pong.isElder()) {
-            reincarnate(transactionState, pong.rowsWithWriteWriteConflict);
+            reincarnate(txnState, pong.rowsWithWriteWriteConflict);
             try {
                 txnState.tsoclient.completeReincarnation(txnState.getStartTimestamp(), PingCallback.DUMMY);
             } catch (IOException e) {
                 LOG.error("Couldn't send reincarnation report", e);
             }
+        }
+        Statistics.println();
+    }
+
+    /**
+     * commit a global transaction
+     */
+    public void tryGlobalCommit(TransactionState transactionState)
+        throws CommitUnsuccessfulException, TransactionException {
+        TxnGlobalState txnState = (TxnGlobalState) transactionState.txnState;
+        Statistics.fullReport(Statistics.Tag.COMMIT, 1);
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("tryGlobalCommit " + txnState.getSequence());
+        }
+
+        boolean failed = false;
+        int numOfPartitions = sortedRangeClientMap.size();
+        PingPongCallback<CommitResponse>[] tccbs = new PingPongCallback[numOfPartitions];
+        try {
+            //1. send prepare commits: first phase of 2pc
+            PingPongCallback<PrepareResponse>[] prcbs;
+            prcbs = new PingPongCallback[numOfPartitions];
+            int i = 0;
+            for (Map.Entry<KeyRange,TxnPartitionState> entry: txnState.getPartitions().entrySet()) {
+                prcbs[i] = new PingPongCallback<PrepareResponse>();
+                TxnPartitionState txnPartitionState = entry.getValue();
+                long ts = txnPartitionState.getStartTimestamp();
+                PrepareCommit pcmsg = new PrepareCommit(ts,
+                        txnPartitionState.getWrittenRows(),
+                        txnPartitionState.getReadRows(),
+                        txnState.vts);
+                txnPartitionState.tsoclient.prepareCommit(ts, pcmsg, prcbs[i]);
+                i++;
+            }
+            //2. wait for prepare response from all nodes
+            boolean success = true;
+            for (PingPongCallback<PrepareResponse> prcb: prcbs) {
+                prcb.await();
+                success = success && prcb.getPong().committed;
+            }
+            //3. get a vector commit timestamp: second phase of 2pc
+            //3.1 first register for the responses
+            i = 0;
+            for (Map.Entry<KeyRange,TxnPartitionState> entry: txnState.getPartitions().entrySet()) {
+                TxnPartitionState txnPartitionState = entry.getValue();
+                long ts = txnPartitionState.getStartTimestamp();
+                tccbs[i] = txnPartitionState.tsoclient.registerCommitCallback(ts);
+                i++;
+            }
+            //3.2 send the request to the seuqencer
+            MultiCommitRequest mcr = new MultiCommitRequest(txnState.vts);
+            mcr.successfulPrepared = success;
+            sequencerClient.getNewIndirectCommitTimestamp(mcr);
+            //3.3 wait for commit responses
+            failed = false;
+            for (i = 0; i < numOfPartitions; i++) {
+                tccbs[i].await();
+                if (tccbs[i].getException() != null)
+                    failed = true;
+            }
+        } catch (Exception e) {
+            throw new TransactionException("Exception in committing global txn", e);
+        } finally {
+            for (TxnPartitionState txnPartitionState: txnState.getPartitions().values())
+                txnPartitionState.tsoclient.aborted.aTxnFinished(txnPartitionState.getStartTimestamp());
+            if (failed)
+                throw new TransactionException("Error committing global txn", null);
+        }
+
+
+        boolean aborted = false;
+        for (PingPongCallback<CommitResponse> tccb: tccbs)
+            aborted = aborted || !tccb.getPong().committed;
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("doneCommit " + txnState.getSequence() +
+                    " Success: " + !aborted);
+        }
+
+        //cleanup after abort
+        if (aborted) {
+            for (TxnPartitionState txnPartitionState: txnState.getPartitions().values())
+                cleanup(txnPartitionState);
+            throw new CommitUnsuccessfulException();
+        }
+        //reincarnate if it is necessary
+        int i = 0;
+        for (TxnPartitionState txnPartitionState: txnState.getPartitions().values()) {
+            txnPartitionState.setCommitTimestamp(tccbs[i].getPong().commitTimestamp);
+            if (tccbs[i].getPong().isElder()) {
+                reincarnate(txnPartitionState, tccbs[i].getPong().rowsWithWriteWriteConflict);
+                try {
+                    txnPartitionState.tsoclient.completeReincarnation(txnPartitionState.getStartTimestamp(), PingCallback.DUMMY);
+                } catch (IOException e) {
+                    LOG.error("Couldn't send reincarnation report", e);
+                }
+            }
+            i++;
         }
         Statistics.println();
     }
@@ -194,8 +343,8 @@ public class TransactionManager {
      * @throws TransactionException
      */
     public void abort(TransactionState transactionState) throws TransactionException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
+        TxnPartitionState txnState =
+            (TxnPartitionState) transactionState.txnState;
         TSOClient tsoclient = txnState.tsoclient;
         if (LOG.isTraceEnabled()) {
             LOG.trace("abort " + txnState.getStartTimestamp());
@@ -214,13 +363,11 @@ public class TransactionManager {
 
         // Make sure its commit timestamp is 0, so the cleanup does the right job
         txnState.setCommitTimestamp(0);
-        cleanup(transactionState);
+        cleanup(txnState);
     }
 
-    private void reincarnate(final TransactionState transactionState, ArrayList<RowKey> rowsWithWriteWriteConflict)
+    private void reincarnate(final TxnPartitionState txnState, ArrayList<RowKey> rowsWithWriteWriteConflict)
         throws TransactionException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
         Statistics.fullReport(Statistics.Tag.REINCARNATION, 1);
         Map<byte[], List<Put>> putBatches = new HashMap<byte[], List<Put>>();
         for (final RowKeyFamily rowkey : txnState.getWrittenRows()) {
@@ -254,10 +401,8 @@ public class TransactionManager {
         }
     }
 
-    private void cleanup(final TransactionState transactionState)
+    private void cleanup(final TxnPartitionState txnState)
         throws TransactionException {
-        TransactionState.TxnPartitionState txnState =
-            (TransactionState.TxnPartitionState) transactionState.txnState;
         TSOClient tsoclient = txnState.tsoclient;
         Map<byte[], List<Delete>> deleteBatches = new HashMap<byte[], List<Delete>>();
         for (final RowKeyFamily rowkey : txnState.getWrittenRows()) {
