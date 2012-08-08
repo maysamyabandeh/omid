@@ -105,6 +105,27 @@ public class TransactionManager {
         lastLocalTxnFailed = true;
     }
 
+    KeyRange lastUsedKeyRange = null;
+    TSOClient lastUsedTSOClient = null;
+    void reportLastUsedPartition(KeyRange keyRange, TSOClient tsoClient) {
+        lastUsedKeyRange = keyRange;
+        lastUsedTSOClient = tsoClient;
+    }
+
+    /**
+     * This method implement the policy to choose a partition for the transaction
+     * @return the TSOClient that is the interface to the selected partition
+     */
+    protected Map.Entry<KeyRange,TSOClient> selectAPartition() {
+        Map.Entry<KeyRange,TSOClient> chosen = null;
+        if (lastUsedKeyRange == null)
+            chosen = sortedRangeClientMap.firstEntry();
+        else
+            chosen = sortedRangeClientMap.floorEntry(lastUsedKeyRange);
+        //System.out.println("CHOSEN: " + chosen.getKey() + " " + chosen.getValue());
+        return chosen;
+    }
+
     /**
      * Starts a new transaction.
      * 
@@ -136,19 +157,6 @@ public class TransactionManager {
         TimestampResponse pong = cb.getPong();
         tsoclient.aborted.aTxnStarted(pong.timestamp);
         return new TransactionState(pong.timestamp, tsoclient, keyRange, this);
-    }
-
-    /**
-     * This method implement the policy to choose a partition for the transaction
-     * @return the TSOClient that is the interface to the selected partition
-     */
-    protected Map.Entry<KeyRange,TSOClient> selectAPartition() {
-        Map.Entry<KeyRange,TSOClient> chosen = null;
-        for (Map.Entry<KeyRange,TSOClient> entry: sortedRangeClientMap.entrySet()) {
-            chosen = entry;
-            break;
-        }
-        return chosen;
     }
 
     /**

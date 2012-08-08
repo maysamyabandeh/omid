@@ -55,6 +55,8 @@ public class TransactionState {
             txnManager.reportFailedPartitioning();
             throw new InvalidTxnPartitionException("Need to start a global transaction");
         }
+        txnManager.reportLastUsedPartition(tps.keyRange, tps.tsoclient);
+        //System.out.println("LAST: [" + (txnState.isGlobal() ? 'G' : 'L') + "] (key=" + rowKey + ") " + tps.keyRange + " " + tps.tsoclient);
         return tps;
     }
 
@@ -120,7 +122,7 @@ public class TransactionState {
      * The state of a transaction for a partition of status oracle
      */
     static class TxnPartitionState extends TxnState {
-        private KeyRange keyRange; //the range covered by this partition
+        KeyRange keyRange; //the range covered by this partition
         private long startTimestamp;
         private long commitTimestamp;
         private Set<RowKeyFamily> writtenRows = new HashSet<RowKeyFamily>();
@@ -138,7 +140,7 @@ public class TransactionState {
             throws TransactionException {
             if (key == null || keyRange.includes(key))
                 return this;
-            System.out.println("Wrong partition");
+            System.out.println("Wrong partition for key " + key);
             return null;//indicating that the current partition does not cover key
         }
 
