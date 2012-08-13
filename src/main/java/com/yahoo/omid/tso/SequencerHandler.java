@@ -177,6 +177,7 @@ public class SequencerHandler extends SimpleChannelHandler {
                     stopBroadcastingTo(channel);
                     return;
                 }
+                Thread.sleep(5);//allow the writes to accumulate
                 ChannelBuffer tail = logReader.tail();
                 if (tail == null)
                     return;
@@ -312,6 +313,9 @@ public class SequencerHandler extends SimpleChannelHandler {
         Object msg = e.getMessage();
         if (msg instanceof BroadcastJoinRequest) {//coming from TSO to register
             initReader(ctx.getChannel(), (BroadcastJoinRequest)msg, logPersister);
+        //} else if (!(msg instanceof ChannelBuffer)) {
+            //System.out.println("WRONG MSG: " + msg);
+            //System.out.println("channel: " + ctx.getChannel());
         } else
             multicast((ChannelBuffer)msg);
     }
