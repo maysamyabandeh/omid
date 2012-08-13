@@ -60,7 +60,7 @@ public class TransactionManager {
     private HashMap<byte[], HTable> tableCache;
     private static TreeMap<KeyRange,TSOClient> sortedRangeClientMap = null;
     private static TSOClient sequencerClient;
-    AtomicLong sequenceGenerator = new AtomicLong();
+    private static AtomicLong sequenceGenerator = new AtomicLong();
 
     public TransactionManager(Configuration conf) 
         throws TransactionException, IOException {
