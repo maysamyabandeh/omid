@@ -163,6 +163,7 @@ public class TSOClient extends BasicClient {
      * by an indirect message
      */
     public PingPongCallback<TimestampResponse> registerTimestampCallback(long sequence) throws IOException {
+        //LOG.error("REGISTER " + sequence + " at " + myId + " on " + channel);
         PingPongCallback<TimestampResponse> cb = new PingPongCallback();
         synchronized(sequencedTimestampCallbacks) {
             sequencedTimestampCallbacks.put(sequence, cb);
@@ -389,6 +390,7 @@ public class TSOClient extends BasicClient {
             cb.complete(r);
         } else if (msg instanceof TimestampResponse) {
             TimestampResponse tr = (TimestampResponse)msg;
+            //LOG.error(tr + " at " + myId + " on " + channel);
             if (!hasConnectionTimestamp || tr.timestamp < connectionTimestamp) {
                 hasConnectionTimestamp = true;
                 connectionTimestamp = tr.timestamp;
@@ -483,6 +485,7 @@ public class TSOClient extends BasicClient {
         if (transaction <= largestDeletedTimestamp)
             return LOST_TC;//committed but the tc is lost
 
+        LOG.error("asktso: txn: " + transaction + " -> " + commitTimestamp + " ts: " + startTimestamp + " tmax: " + largestDeletedTimestamp + "(" + hasConnectionTimestamp + ")" + connectionTimestamp);
         Statistics.partialReport(Statistics.Tag.ASKTSO, 1);
         askedTSO++;
         PingPongCallback<CommitQueryResponse> cb = new PingPongCallback<CommitQueryResponse>();

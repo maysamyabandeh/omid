@@ -107,9 +107,12 @@ public class TransactionManager {
 
     KeyRange lastUsedKeyRange = null;
     TSOClient lastUsedTSOClient = null;
+    TreeMap<KeyRange,Long> usageHistory = new TreeMap<KeyRange,Long>();
     void reportLastUsedPartition(KeyRange keyRange, TSOClient tsoClient) {
         lastUsedKeyRange = keyRange;
         lastUsedTSOClient = tsoClient;
+        Long usageCount = usageHistory.get(keyRange);
+        usageHistory.put(keyRange, usageCount == null ? 1 : usageCount+1);
     }
 
     /**
@@ -120,10 +123,24 @@ public class TransactionManager {
         Map.Entry<KeyRange,TSOClient> chosen = null;
         if (lastUsedKeyRange == null)
             chosen = sortedRangeClientMap.firstEntry();
-        else
-            chosen = sortedRangeClientMap.floorEntry(lastUsedKeyRange);
+        else {
+            KeyRange mostFrequentKeyRange = getMostFrequentKeyRange();
+            chosen = sortedRangeClientMap.floorEntry(mostFrequentKeyRange);
+        }
         //System.out.println("CHOSEN: " + chosen.getKey() + " " + chosen.getValue());
         return chosen;
+    }
+
+    protected KeyRange getMostFrequentKeyRange() {
+        KeyRange mostFrequentKeyRange = null;
+        Long mostFrequentUsage = null;
+        for (Map.Entry<KeyRange,Long> entry: usageHistory.entrySet()) {
+            if (mostFrequentUsage == null || entry.getValue() > mostFrequentUsage) {
+                mostFrequentUsage = entry.getValue();
+                mostFrequentKeyRange = entry.getKey();
+            }
+        }
+        return mostFrequentKeyRange;
     }
 
     /**

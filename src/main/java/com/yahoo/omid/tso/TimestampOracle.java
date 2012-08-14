@@ -80,8 +80,8 @@ public class TimestampOracle {
         return first;
     }
 
-    //private static final String BACKUP = "/tmp/tso-persist.backup";
-    //private static final String PERSIST = "/tmp/tso-persist.txt";
+    private static final String BACKUP = "/tmp/tso-persist.backup";
+    private static final String PERSIST = "/tmp/tso-persist.txt";
 
     
     /**
@@ -91,6 +91,7 @@ public class TimestampOracle {
         this.enabled = false;
         //make sure you do not use timestamp 0. It triggers a bug in HBase. Since the first time we use last++, initializing it to 0 is fine.
         this.last = 0;
+        initialize();
     }
     
     /**
@@ -98,26 +99,28 @@ public class TimestampOracle {
      */
     public void initialize(){
        this.enabled = true;
+       //enable the old scheme of reading the last timestmap from a file
+       initFromFile();
     }
-    
+
     /**
      * Starts with a given timestamp.
      * 
      * @param timestamp
      */
     public void initialize(long timestamp){
+        //TODO: it seems that it ignore the input param
         LOG.info("Initializing timestamp oracle");
         this.last = this.first = Math.max(this.last, TIMESTAMP_BATCH);
         maxTimestamp = this.first;
         LOG.info("First: " + this.first + ", Last: " + this.last);
-        initialize();
+        this.enabled = true;
     }
     
     /**
-     * Constructor initialize the last timestamp TODO: initialize from the last
-     * persisted timestamp + wallclock time
+     * initialize the last timestamp 
      */
- /*   public TimestampOracle() {
+    public void initFromFile() {
         BufferedReader reader = null;
         try {
             reader = new BufferedReader(new FileReader(PERSIST));
@@ -145,7 +148,7 @@ public class TimestampOracle {
         Thread flusher = new Thread(new Runnable() {
             @Override
             public void run() {
-                while (!finish) {
+                while (enabled) {
                     try {
                         Thread.sleep(1000);
                     } catch (InterruptedException e) {
@@ -182,7 +185,7 @@ public class TimestampOracle {
         });
         flusher.start();
     }
-*/    
+
     public void stop() {
         this.enabled = false;
     }

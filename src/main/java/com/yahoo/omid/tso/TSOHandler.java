@@ -128,6 +128,7 @@ public class TSOHandler extends SimpleChannelHandler {
         this.channelGroup = channelGroup;
         this.timestampOracle = state.getSO();
         this.sharedState = state;
+        System.out.println("TMAX: " + sharedState.largestDeletedTimestamp);
         this.flushThread = new FlushThread();
         this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
             @Override

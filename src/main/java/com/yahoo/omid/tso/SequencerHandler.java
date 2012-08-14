@@ -256,6 +256,7 @@ public class SequencerHandler extends SimpleChannelHandler {
                         Thread.yield();
                         continue;
                     }
+                    TSOHandler.globaltxnCnt++;
                     ChannelBuffer tail = toBePersistedData.getData();
                     byte[] record;
                     record = new byte[tail.readableBytes()];
@@ -332,6 +333,7 @@ public class SequencerHandler extends SimpleChannelHandler {
         TSOSharedMessageBuffer._Avg2 = writeSize / (float) writeCnt;
         TSOSharedMessageBuffer._Writes = writeSize;
         try {
+            TSOHandler.txnCnt++;
             logWriter.append(buf);
         } catch (SharedLogException sharedE) {
             //TODO do something
