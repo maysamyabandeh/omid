@@ -34,6 +34,7 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
+import org.apache.hadoop.hbase.client.ClientScanner;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
@@ -222,8 +223,14 @@ public class TransactionalTable extends HTable {
         //      int maxVersions = scan.getMaxVersions();
         tsscan.setMaxVersions((int) (versionsAvg + CACHE_VERSIONS_OVERHEAD));
         tsscan.setTimeRange(0, scanPartitionState.getStartTimestamp() + 1);
-        ClientScanner scanner = new ClientScanner(transactionState, tsscan, (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD), scanPartitionState);
-        scanner.initialize();
+        OmidClientScanner scanner = null;
+        try {
+            scanner = new OmidClientScanner(getConfiguration(), tsscan, getTableName(), transactionState, (int) (versionsAvg + CACHE_VERSIONS_OVERHEAD), scanPartitionState);
+        } catch (IOException exp) {
+            exp.printStackTrace();
+            System.exit(1);
+            //TODO: react properly
+        }
         return scanner;
     }
 
@@ -418,15 +425,15 @@ public class TransactionalTable extends HTable {
             filteredList.add(kv);
     }
 
-    protected class ClientScanner extends HTable.ClientScanner {
+    protected class OmidClientScanner extends ClientScanner {
         private TransactionState state;
         private int maxVersions;
         private TxnPartitionState scanPartitionState;
         private long startTimestamp;
 
-        ClientScanner(TransactionState state, Scan scan, int maxVersions,
-                TxnPartitionState scanPartitionState) {
-            super(scan);
+        OmidClientScanner(Configuration conf, Scan scan, byte[] tableName, TransactionState state, int maxVersions,
+                TxnPartitionState scanPartitionState) throws IOException {
+            super(conf, scan, tableName);
             this.state = state;
             this.maxVersions = maxVersions;
             this.scanPartitionState = scanPartitionState;
