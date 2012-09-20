@@ -19,10 +19,17 @@
 ########################################################################
 
 
+
+BUFFERSIZE=1000;
 BATCHSIZE=1000;
+#these could be overridden by env.sh
+BKPARAM1=4
+BKPARAM2=2
 
 SCRIPTDIR=`dirname $0`
 cd $SCRIPTDIR;
+#TODO: we do not need env.sh, the parameters could be read from omid-site.xml
+source ../../env.sh
 CLASSPATH=../conf
 for j in ../target/omid*.jar; do
     CLASSPATH=$CLASSPATH:$j
@@ -38,20 +45,7 @@ else
 	READLINK=readlink
 fi
 
-sequencer() {
-    export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
-    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.SequencerServer -port 4321 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181 -soId -1
-}
-
-tso() {
-  ID=0;
-  if [ $# -ge 1 ]; then
-    ID=$1
-  fi
-    export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
-    exec java -Xmx1024m -cp $CLASSPATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Djava.library.path=$LD_LIBRARY_PATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TSOServer -port 1234 -batch $BATCHSIZE -ensemble 4 -quorum 2 -zk localhost:2181 -soId $ID
-}
-
+# run a test of tso in isolation from hbase
 tsobench() {
 NMSG=10
 NCLIENTS=5
@@ -68,34 +62,41 @@ fi
 
 echo running with $NMSG outstanding messages and $NCLIENTS clients
 echo MAX_ROWS = $MAX_ROWS
-    #exec java -Xdebug -Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=y -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient localhost 1234 -zk localhost:2181 1000000 $NMSG $NCLIENTS $MAX_ROWS
-    exec java -Xmx1024m -cp $CLASSPATH -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient localhost 1234 -zk localhost:2181 1000000 $NMSG $NCLIENTS $MAX_ROWS
+simclients localhost $NMSG $NCLIENTS $MAX_ROWS
+}
+
+# use to run tso experiments with simulated clients
+simclients() {
+    export LD_LIBRARY_PATH=`readlink -f ../src/main/native`
+	 machine=$1
+	 shift
+#YOURKIT="-Xdebug -Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=n"
+    exec $JAVA_HOME/bin/java $YOURKIT -Xmx2048m -cp $CLASSPATH -Djava.library.path=$LD_LIBRARY_PATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient $TSOSERVER0 1234 -zk $ZKSERVERLIST 1000000000 $*   &> ${BASE}/clients-$machine.log 
+}
+
+sequencer() {
+	ID=-1;
+	PORT=1233;
+	if [ $# -ge 1 ]; then
+		PORT=$1
+	fi
+    export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
+    exec $JAVA_HOME/bin/java $YOURKIT -Xmx1024m -cp $CLASSPATH -Djava.library.path=$LD_LIBRARY_PATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.SequencerServer -port $PORT -batch $BATCHSIZE -ensemble $BKPARAM1 -quorum $BKPARAM2 -zk $ZKSERVERLIST -soId $ID &> $STATS/sequencer.log
+}
+
+tso() {
+	ID=0;
+	if [ $# -ge 1 ]; then
+		ID=$1
+	fi
+#YOURKIT="-agentpath:/net/yrl-scratch/maysam/profiler/yjp-9.0.9/bin/linux-x86-64/libyjpagent.so=disablestacktelemetry,disableexceptiontelemetry,builtinprobes=none,delay=10000"
+    export LD_LIBRARY_PATH=`$READLINK -f ../src/main/native`
+    exec $JAVA_HOME/bin/java $YOURKIT -Xmx1024m -cp $CLASSPATH -Djava.library.path=$LD_LIBRARY_PATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Dlog4j.configuration=log4j.properties com.yahoo.omid.tso.TSOServer   -port 1234 -batch $BATCHSIZE -ensemble $BKPARAM1 -quorum $BKPARAM2 -zk $ZKSERVERLIST -soId $ID &> $STATS/tso$ID.log
 }
 
 bktest() {
-    #turn monitor on to let fg work
-    set -m
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.bookkeeper.util.LocalBookKeeper 5 &
-    #wait for zk to be listening
-    sleep 1
-    initzk
-    fg
+    exec java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.bookkeeper.util.LocalBookKeeper 5
 }
-
-initzk() {
-    echo Registers the sequencer in the ZooKeeper
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer b ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/ip localhost ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sequencer/port 4321 ;
-    echo Registers the SOs in the ZooKeeper
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos b ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0 b ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/ip localhost ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/port 1234 ;
-    java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/start aaaa ;
-    #java -cp $CLASSPATH -Dlog4j.configuration=log4j.properties org.apache.zookeeper.ZooKeeperMain -server localhost:2181 create /sos/0/end zzzz ;
-}
-
 
 tranhbase() {
     pwd
@@ -126,13 +127,16 @@ fi
 COMMAND=$1
 
 if [ "$COMMAND" = "tso" ]; then
-    shift
+	 shift
     tso $*;
 elif [ "$COMMAND" = "sequencer" ]; then
-    sequencer;
-elif [ "$COMMAND" = "tsobench" ]; then
   shift
-    tsobench $*;
+	 sequencer $*;
+elif [ "$COMMAND" = "simclients" ]; then
+	 shift
+    simclients $*;
+elif [ "$COMMAND" = "tsobench" ]; then
+    tsobench;
 elif [ "$COMMAND" = "bktest" ]; then
     bktest;
 elif [ "$COMMAND" = "tran-hbase" ]; then

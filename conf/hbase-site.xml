@@ -13,6 +13,12 @@
  See the License for the specific language governing permissions and
  limitations under the License. See accompanying LICENSE file.
  -->
+
+<!---
+This file is used to test compactor locally. It is not used by Omid
+TODO: get rid of it. It is confusing.
+-->
+
 <configuration>
   <property>
     <name>tso.host</name>

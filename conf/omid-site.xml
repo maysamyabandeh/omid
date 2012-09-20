@@ -36,6 +36,6 @@
   </property>
   <property>
     <name>zk</name>
-    <value>localhost:2181</value>
+    <value>localhost:2223</value>
   </property>
 </configuration>
