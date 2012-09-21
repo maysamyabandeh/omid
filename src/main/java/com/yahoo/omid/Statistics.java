@@ -42,6 +42,9 @@ public class Statistics {
             EMPTY_FOR_PERSISTENCE,//number of reads by persistence that return null
             EMPTY_FOR_BROADCAST,//number of reads by sequencer boradcaster that return null
             TO_BE_PERSISTED_SIZE,//number of bytes read by persister
+            LATENCY,//commit latency in ms
+            GLATENCY,//commit latency of global transactions
+            LLATENCY,//commit latency of local transactions
             dummy
     }
     static class History {
@@ -104,9 +107,14 @@ public class Statistics {
         }
         return true;
     }
+	 static boolean warned = false;
     static public void println() {
-        if(!LOG.isInfoEnabled())
+        if(!LOG.isInfoEnabled()) {
+			  if (!warned)
+				  LOG.warn("Info is not enabled in log4j -> no statistics report");
+			  warned = true;
             return;
+		  }
         synchronized (histories) {
             if (skipReport())
                 return;

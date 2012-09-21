@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import com.yahoo.omid.IsolationLevel;
 import com.yahoo.omid.OmidConfiguration;
+import com.yahoo.omid.Statistics;
 import com.yahoo.omid.tso.TSOMessage;
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.messages.CommitResponse;
@@ -243,6 +244,7 @@ while (curMessage > 0) {
                     share, readOnly);
         }
         if (!readOnly) {
+			  long startNanoTime = System.nanoTime();
             //3. send prepares
             long[] vts = new long[tsoClients.length];
             for (int i = 0; i < tsoClients.length; i++)
@@ -281,6 +283,10 @@ while (curMessage > 0) {
             }
             if (failed)
                 throw new TransactionException("Error committing", null);
+				long finishNanoTime = System.nanoTime();
+				int lat = (int) (finishNanoTime - startNanoTime) / 1000;
+				Statistics.fullReport(Statistics.Tag.GLATENCY, lat);
+				Statistics.fullReport(Statistics.Tag.LATENCY, lat);
         } else {//readOnly
             //Do nothing, no need to commit if trackProgress is set to false in start timestamp request
         //PingPongCallback<CommitResponse>[] tccbs;
@@ -302,6 +308,7 @@ while (curMessage > 0) {
         //    throw new TransactionException("Error committing", null);
         }
         //System.out.print("+");
+		  Statistics.println();
     } catch (TransactionException e) {
         System.out.print("-");
     } catch (InterruptedException e) {
@@ -545,11 +552,17 @@ while (curMessage > 0) {
             long finishNanoTime = System.nanoTime();
             long startNanoTime = wallClockTime.remove(msg.startTimestamp);
             if (msg.committed) {
+					//I keep both old and new systems for statistics reports for the sake of backward compaticility, eventually only Statistics should be kept
+					int lat = (int) (finishNanoTime - startNanoTime) / 1000;
+					Statistics.fullReport(Statistics.Tag.LLATENCY, lat);
+					Statistics.fullReport(Statistics.Tag.LATENCY, lat);
+					Statistics.println();
+
                 totalNanoTime += (finishNanoTime - startNanoTime);
                 totalTx++;
                 long timeout = System.currentTimeMillis();
                 // if (totalTx % 10000 == 0) {//print out
-                if (timeout - lastTimeout > 60 * 1000) { // print out
+                if (timeout - lastTimeout > 10 * 1000) { // print out
                     long difftx = totalTx - lasttotalTx;
                     long difftime = totalNanoTime - lasttotalNanoTime;
                     System.out.format(

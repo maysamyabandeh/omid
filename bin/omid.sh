@@ -71,7 +71,7 @@ simclients() {
 	 machine=$1
 	 shift
 #YOURKIT="-Xdebug -Xrunjdwp:transport=dt_socket,address=5005,server=y,suspend=n"
-    exec $JAVA_HOME/bin/java $YOURKIT -Xmx2048m -cp $CLASSPATH -Djava.library.path=$LD_LIBRARY_PATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient $TSOSERVER0 1234 -zk $ZKSERVERLIST 1000000000 $*   &> ${BASE}/clients-$machine.log 
+    exec $JAVA_HOME/bin/java $YOURKIT -Xmx2048m -cp $CLASSPATH -Djava.library.path=$LD_LIBRARY_PATH -Domid.maxItems=1000000 -Domid.maxCommits=30000000 -Dlog4j.configuration=log4j.properties com.yahoo.omid.client.SimClient $TSOSERVER0 1234 -zk $ZKSERVERLIST 1000000000 $*   &> ${STATS}/clients-$machine.A
 }
 
 sequencer() {
