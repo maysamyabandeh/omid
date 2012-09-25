@@ -64,7 +64,7 @@ import java.util.HashSet;
 import java.util.concurrent.ScheduledExecutorService;
 import com.yahoo.omid.sharedlog.*;
 import com.yahoo.omid.tso.persistence.StateLogger;
-import com.yahoo.omid.tso.persistence.BookKeeperStateLogger;
+import com.yahoo.omid.tso.persistence.ManagedLedgerStateLogger;
 import org.apache.zookeeper.ZooKeeper;
 
 /**
@@ -123,7 +123,7 @@ public class SequencerHandler extends SimpleChannelHandler {
 
     void initLogBackend(ZooKeeper zk) {
         try {
-            new BookKeeperStateLogger(zk).initialize(new LoggerInitCallback() {
+            new ManagedLedgerStateLogger(zk).initialize(new LoggerInitCallback() {
                 public void loggerInitComplete(int rc, StateLogger sl, Object ctx){
                     if(rc == Code.OK){
                         if(LOG.isDebugEnabled()){
