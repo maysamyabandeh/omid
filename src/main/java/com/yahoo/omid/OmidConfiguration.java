@@ -75,6 +75,7 @@ public class OmidConfiguration extends Configuration {
             sequencerConf.setProperty("tso.host", sequencerIP);
             sequencerConf.setProperty("tso.port", sequencerPort);
             sequencerConf.setProperty("tso.executor.threads", "10");
+            sequencerConf.setProperty("zkServers", zkServers);
 
             List<String> sos = zk.getChildren("/sos", false);
             System.out.println(sos);

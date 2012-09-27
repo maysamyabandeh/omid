@@ -53,6 +53,23 @@ import org.jboss.netty.channel.ChannelFuture;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.DefaultChannelPipeline;
 
+import org.apache.bookkeeper.mledger.ManagedLedger;
+import org.apache.bookkeeper.mledger.ManagedCursor;
+import org.apache.bookkeeper.mledger.ManagedLedgerFactory;
+import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryImpl;
+import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
+import org.apache.bookkeeper.mledger.AsyncCallbacks.AddEntryCallback;
+import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
+import org.apache.bookkeeper.mledger.Position;
+import com.yahoo.omid.tso.persistence.LoggerException;
+import com.yahoo.omid.tso.persistence.LoggerException.Code;
+import org.apache.zookeeper.ZooKeeper;
+import org.apache.bookkeeper.client.BookKeeper;
+import org.apache.bookkeeper.conf.ClientConfiguration;
+import com.yahoo.omid.tso.persistence.LoggerConstants;
+import org.apache.bookkeeper.mledger.Entry;
+
 /**
  * This client connects to the sequencer to register as a receiver of the broadcast stream
  * Note: This class is not thread-safe
@@ -75,9 +92,9 @@ public class SequencerClient extends BasicClient {
      */
     long lastReadIndex = 0;
 
+    LogBackendReader logBackendReader = new LogBackendReader() {
     //for the moment use a dummy logBackendReader
     //it should be replaced by ManagedLedger when it is released
-    LogBackendReader logBackendReader = new LogBackendReader() {
         @Override
         public void readRange(long fromIndex, long toIndex, ReadRangeCallback cb) {
             //read dummy but safe data
@@ -97,6 +114,133 @@ public class SequencerClient extends BasicClient {
         }
     };
 
+    /**
+     * This class provide a backend reader based on managed ledgers on bookkeeper
+     * It is very inefficient and should be replaced with a proper backend
+     * TODO: replace it with a proper backend
+     */
+    private class ManagedLedgerBackendReader implements LogBackendReader {
+        ManagedCursor cursor;
+        /**
+         * last read index by the cursor
+         */
+        long index = 0;
+        public void init(String zkServers) throws LoggerException {
+            ZooKeeper zk;
+            BookKeeper bk;
+            try {
+                zk = new ZooKeeper(zkServers, 
+                        Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
+                        null);
+                bk = new BookKeeper(new ClientConfiguration(), zk);
+            } catch (Exception e) {
+                LOG.error("Exception while initializing bookkeeper", e);
+                e.printStackTrace();
+                throw new LoggerException.BKOpFailedException();  
+            }
+
+            ManagedLedgerFactory factory;
+            try {
+                factory = new ManagedLedgerFactoryImpl(bk, zk);
+            } catch (Exception e) {
+                LOG.error("Exception while creating managed ledger bookkeeper", e);
+                e.printStackTrace();
+                throw new LoggerException.BKOpFailedException();  
+            }
+
+            final String path = LoggerConstants.OMID_SEQUENCERLEDGER_ID_PATH;
+            try {
+                ManagedLedger ledger = factory.open(path);
+                LOG.warn("Successfully opened the managed ledger " + path);
+                cursor = ledger.openCursor("reader" + myId);
+            } catch (Exception exception) {
+                LOG.error("Failed to open the managed ledger " + path, exception );
+                exception.printStackTrace();
+            };
+        }
+
+        /**
+         * Since BK stores entries, we need to make a mapping between entries and 
+         * the byte indexes
+         */
+        @Override
+        public void readRange(long fromIndex, long toIndex, ReadRangeCallback cb) {
+            System.out.println("readRange from backend : " + fromIndex + " " + toIndex);
+            //1. seek to fromIndex
+            /**
+             * TODO: this is a very inefficient seek, either upgrade managed ledger
+             * or replace bookkeeper
+             */
+            SEEK:
+            while (index < fromIndex) {
+                //assert(cursor.hasMoreEntries());
+                int seekStep = (int) ((fromIndex - index) / 1000);//1000 is estimated entry size
+                seekStep = Math.max(1, seekStep);
+                System.out.println("seekStep : " + seekStep + " " + fromIndex + " " + index + " " + toIndex);
+                java.util.List<Entry> entries = null;
+                try {
+                    entries = cursor.readEntries(seekStep);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    System.exit(1);
+                    //TODO: react better
+                }
+                System.out.println("parse entries[" + entries.size() + "]");
+                if (entries.size() == 0)
+                    System.exit(1);
+                for (Entry entry: entries) {
+                    index += entry.getData().length;
+                    System.out.println("entry : " + entry.getData().length + " " + fromIndex + " " + index + " " + toIndex);
+                    if (index >= fromIndex) {
+                        index -= entry.getData().length;//cancel the entry read effect
+                        cursor.seek(entry.getPosition());
+                        //we want to start reading from this entry
+                        break SEEK;
+                    }
+                }
+            }
+            //2. now read entries up to toIndex
+            long nextIndex = -1;
+LOGREAD:
+            while (index < toIndex) {
+                //assert(cursor.hasMoreEntries());
+                int readStep = (int)((toIndex - index) / 1000);//1000 is estimated entry size
+                readStep = Math.max(1, readStep);
+                System.out.println("readStep : " + readStep + " " + fromIndex + " " + index + " " + toIndex);
+                java.util.List<Entry> entries = null;
+                try {
+                    entries = cursor.readEntries(readStep);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    System.exit(1);
+                    //TODO: react better
+                }
+                System.out.println("parse entries[" + entries.size() + "]");
+                for (Entry entry: entries) {
+                    nextIndex = index + entry.getData().length;
+                    if (index >= fromIndex && nextIndex < toIndex) {
+                        cb.rangePartiallyRead(Code.OK, entry.getData());
+                    } else {
+                        byte[] data = entry.getData();
+                        ChannelBuffer buffer = ChannelBuffers.copiedBuffer(data,
+                                (int) Math.max(0, fromIndex - index),
+                                (int) Math.min(toIndex - index, data.length));
+                        byte[] dst = new byte[buffer.readableBytes()];
+                        buffer.readBytes(dst);
+                        cb.rangePartiallyRead(Code.OK, dst);
+                    }
+                    System.out.println("entry : " + entry.getData().length + " " + fromIndex + " " + index + " " + toIndex);
+                    if (nextIndex >= toIndex) {
+                        cursor.seek(entry.getPosition());
+                        break LOGREAD;
+                    } else
+                        index = nextIndex;
+                }
+            }
+            cb.rangeReadComplete(Code.OK, nextIndex);
+        }
+    }
+
     public SequencerClient(Properties conf, TSOState tsoState, ChannelGroup channelGroup) throws IOException {
         super(conf,0,false, null);
         //the id does not matter here (=0)
@@ -105,6 +249,15 @@ public class SequencerClient extends BasicClient {
         this.tsoHandler = new TSOHandler(channelGroup, tsoState);
         initLoopbackChannel();
         registerForBroadcast(lastReadIndex);
+        ManagedLedgerBackendReader mlbr = new ManagedLedgerBackendReader();
+        try {
+            mlbr.init(conf.getProperty("zkServers"));
+        } catch (LoggerException e) {
+            e.printStackTrace();
+            System.exit(1);
+            //TODO: react better
+        }
+        //logBackendReader = mlbr;
     }
 
     /**
@@ -254,7 +407,7 @@ public class SequencerClient extends BasicClient {
      */
     synchronized
     void resumeBroadcastIfRangeReadIsComplete() {
-        //System.out.println("resumeBroadcastIfRangeReadIsComplete: " + lastReadIndex + " " + lastReadIndexFromBackend);
+        System.out.println("resumeBroadcastIfRangeReadIsComplete: " + lastReadIndex + " " + lastReadIndexFromBackend);
         if (lastReadIndex == lastReadIndexFromBackend) {
             lastReadIndexFromBackend = -1;//to cancel the next invocation of the method
             resumeBroadcast();
@@ -271,7 +424,7 @@ public class SequencerClient extends BasicClient {
     void resumeBroadcast() {
         //TODO: improvisation, remove it later
         //cancel the effect of reads
-        lastReadIndex = lastReadIndexFromBroadcaster;
+        //lastReadIndex = lastReadIndexFromBroadcaster;
         try {
             registerForBroadcast(lastReadIndex);
         } catch (IOException ioe) {
