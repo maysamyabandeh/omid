@@ -51,7 +51,7 @@ public class TimestampOracle {
     private long last;
     private long first;
 
-    private boolean enabled;    
+    private boolean enabled;
 
     /**
      * Must be called holding an exclusive lock
@@ -68,7 +68,7 @@ public class TimestampOracle {
         if(LOG.isTraceEnabled()){
             LOG.trace("Next timestamp: " + last);
         }
-        
+
         return last;
     }
 
@@ -83,7 +83,6 @@ public class TimestampOracle {
     private static final String BACKUP = "/tmp/tso-persist.backup";
     private static final String PERSIST = "/tmp/tso-persist.txt";
 
-    
     /**
      * Constructor
      */
@@ -93,14 +92,14 @@ public class TimestampOracle {
         this.last = 0;
         initialize();
     }
-    
+
     /**
      * Starts from scratch.
      */
     public void initialize(){
        this.enabled = true;
        //enable the old scheme of reading the last timestmap from a file
-       initFromFile();
+       //initFromFile();
     }
 
     /**
@@ -116,10 +115,11 @@ public class TimestampOracle {
         LOG.info("First: " + this.first + ", Last: " + this.last);
         this.enabled = true;
     }
-    
+
     /**
      * initialize the last timestamp 
      */
+    /*
     public void initFromFile() {
         BufferedReader reader = null;
         try {
@@ -185,6 +185,7 @@ public class TimestampOracle {
         });
         flusher.start();
     }
+    */
 
     public void stop() {
         this.enabled = false;
