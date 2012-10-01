@@ -20,4 +20,5 @@ public interface LoggerConstants {
     final static String OMID_LOCK_PATH = "/omid_lock";
     final static String OMID_LEDGER_ID_PATH = "/omid_ledger_id";
     final static String OMID_SEQUENCERLEDGER_ID_PATH = "omid_seq_ledger_id";
+    final static String OMID_NFS_PATH = "/tmp";
 }

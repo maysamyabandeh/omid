@@ -69,6 +69,11 @@ public class TimestampRequest extends SizedTSOMessage implements TSOMessage, Seq
      */
     public boolean globalTxn = false;
 
+   @Override
+   public String toString() {
+      return "TimestampRequest: sequence: " + sequence + " peerId: " + peerId + " G?[" + globalTxn + "] trackProgress[" + trackProgress + "]";
+   }
+
 	@Override
    public void writeObject(DataOutputStream aOutputStream) 
       throws IOException {

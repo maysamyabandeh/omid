@@ -64,7 +64,7 @@ import java.util.HashSet;
 import java.util.concurrent.ScheduledExecutorService;
 import com.yahoo.omid.sharedlog.*;
 import com.yahoo.omid.tso.persistence.StateLogger;
-import com.yahoo.omid.tso.persistence.ManagedLedgerStateLogger;
+import com.yahoo.omid.tso.persistence.SyncFileStateLogger;
 import org.apache.zookeeper.ZooKeeper;
 
 /**
@@ -123,7 +123,7 @@ public class SequencerHandler extends SimpleChannelHandler {
 
     void initLogBackend(ZooKeeper zk) {
         try {
-            new ManagedLedgerStateLogger(zk).initialize(new LoggerInitCallback() {
+            new SyncFileStateLogger(zk).initialize(new LoggerInitCallback() {
                 public void loggerInitComplete(int rc, StateLogger sl, Object ctx){
                     if(rc == Code.OK){
                         if(LOG.isDebugEnabled()){
@@ -178,6 +178,8 @@ public class SequencerHandler extends SimpleChannelHandler {
                     return;
                 }
                 Thread.sleep(5);//allow the writes to accumulate
+                //inject random errors
+                if (error()) return;
                 ChannelBuffer tail = logReader.tail();
                 if (tail == null)
                     return;
@@ -235,7 +237,23 @@ public class SequencerHandler extends SimpleChannelHandler {
                 exp.printStackTrace();
             }
         }
+
+        boolean error() {
+            if (!sent && logPersister.getGlobalPointer() > 50000) {
+                sendEOB(channel);
+                SequencerHandler.sent = true;
+                return true;
+            }
+            if (!sent2 && logPersister.getGlobalPointer() > 100000) {
+                //activate it for the second time
+                SequencerHandler.sent = false;
+                SequencerHandler.sent2 = true;
+            }
+            return false;
+        }
     }
+    static boolean sent = false;
+    static boolean sent2 = false;
 
     private class PersistenceThread implements Runnable {
         LogPersister logPersister;
