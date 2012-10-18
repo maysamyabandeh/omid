@@ -76,30 +76,31 @@ public class BookKeeperStateBuilder extends StateBuilder {
 
     public static TSOState getState(TSOServerConfig config){
         TSOState returnValue;
-        if(config.getZkServers() == null){
-            LOG.warn("Logger is disabled");
+        //if(config.getZkServers() == null){
+            //LOG.warn("Logger is disabled");
             returnValue = new TSOState(new TimestampOracle());
-        } else {
-            BookKeeperStateBuilder builder = new BookKeeperStateBuilder(config);
-            try{
-                returnValue = builder.buildState();
-                LOG.info("State built");
-            } catch (Throwable e) {
-                LOG.error("Error while building the state.", e);
-                returnValue = null;
-            } finally {
-                builder.shutdown();
-            }
-        }
-        return returnValue;
+        //} else {
+            //BookKeeperStateBuilder builder = new BookKeeperStateBuilder(config);
+            //
+            //try{
+                //returnValue = builder.buildState();
+                //LOG.info("State built");
+            //} catch (Throwable e) {
+                //LOG.error("Error while building the state.", e);
+                //returnValue = null;
+            //} finally {
+                //builder.shutdown();
+            //}
+        //}
+        return returnValue;        
     }
-
+        
     TimestampOracle timestampOracle;
     ZooKeeper zk;
     LoggerProtocol lp;
     boolean enabled;
     TSOServerConfig config;
-
+    
     BookKeeperStateBuilder(TSOServerConfig config) {
         this.timestampOracle = new TimestampOracle();
         this.config = config;
@@ -115,13 +116,13 @@ public class BookKeeperStateBuilder extends StateBuilder {
         boolean hasState = false;
         boolean hasLogger = false;
         StateLogger logger;
-
+        
         synchronized void setState(TSOState state){
             this.state = state;
             hasState = true;
             validate();
         }
-
+        
         synchronized void setLogger(StateLogger logger){
             this.logger = logger;
             hasLogger = true;
