@@ -21,19 +21,30 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.jboss.netty.buffer.ChannelBuffer;
 
 /**
+ * Note: NOT THREAD-SAFE: only one thread should work with this object
+ *
  * A persister follows after a writer and is followed by some readers
  * LogPersister could be followed by multiple threads but must be used for persistence
  * only by one thread. Also, only one on-the-flight to-be-persisted is allowed. In other
- * words, toBePersisted must be called only after persistence of the piece returned
- * by the last toBePersisted call.
+ * words, toBePersisted must be called only after the successful persistence 
+ * of the piece returned by the last toBePersisted call.
+ *
+ * This class is designed to avoid locks. The followers use the persisting 
+ * pointer to see if their reads are still valid: see isPointerValid
  */
 public class LogPersister implements FollowedPointer {
     private SharedLog log;
+
+    /**
+     * The subject that is persisted by this LogPersister
+     */
     private FollowedPointer subject;
+
     /**
      * Last index that is persisted
      */
     private AtomicLong atomicPersistedGlobalPointer;
+
     /**
      * the pointer to the last byte sent for persistence
      * the content between the persisted and persisting is not safely persisted yet
@@ -54,7 +65,7 @@ public class LogPersister implements FollowedPointer {
     /**
      * read the newly generated content by the subject
      * return null if there is no new content
-     * The content does not need verify since other mechanisms must ensure that the
+     * The content need not to be verified since other mechanisms must ensure that the
      * data is not erased before persistence
      * Note: after persistence ack is recieved, the persisted() should be invoked
      * to move the pointer forward
@@ -72,10 +83,10 @@ public class LogPersister implements FollowedPointer {
         Statistics.fullReport(Statistics.Tag.TO_BE_PERSISTED_SIZE, buffer.readableBytes());
         persistingPointer += buffer.readableBytes();
         atomicPersistingGlobalPointer.set(persistingPointer);
-        //TODO: ensure that the read is valid
-        //if (SharedLog.IMMUTABLE_READ)
-            //verifyLastRead();
-        //otherwise, the verification should be called when the user eventually finishes consuming the read data
+        //Note: normally the follower should do a concurrency check to ensure that the 
+        //read data is not concurrently modified by the subject, however, here since
+        //the writer waits for the persister to finish its job (using 
+        //wouldYouBeLaggedBehind), there is no need for this check here
         return new ToBePersistedData(buffer, persistingPointer);
     }
 
@@ -101,6 +112,7 @@ public class LogPersister implements FollowedPointer {
      * Confirm the persitence
      * must be called after receiving the persistence ack
      * must be synchronized since multiple acks could cause concurrent invocations
+     * @assume: persistance ack for x implies successful persistence of all y < x
      */
     synchronized void persisted(long persistedGlobalPointer) {
         long current = atomicPersistedGlobalPointer.get();
@@ -136,7 +148,7 @@ public class LogPersister implements FollowedPointer {
     }
 
     /**
-     * check if the specified range is valid
+     * check if the specified index is valid
      */
     @Override
     public boolean isPointerValid(long globalX) {

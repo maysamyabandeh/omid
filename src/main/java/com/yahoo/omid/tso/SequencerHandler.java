@@ -68,22 +68,33 @@ import com.yahoo.omid.tso.persistence.SyncFileStateLogger;
 import org.apache.zookeeper.ZooKeeper;
 
 /**
- * ChannelHandler for the TSO Server
+ * ChannelHandler for the Sequencer Server
+ * This class implements atomic broadcast.
+ * It receives messages from the clients and broadcast them to the registered 
+ * status oracles.
  * @author maysam
- *
  */
 public class SequencerHandler extends SimpleChannelHandler {
 
     private static final Log LOG = LogFactory.getLog(SequencerHandler.class);
     static long BROADCAST_TIMEOUT = 1;
 
+    /**
+     * The sharedLog is a lock-free log that keeps the recent sequenced messages
+     * The readers read messages from this log and send it to the registered SOs
+     */
     SharedLog sharedLog;
 
     /**
      * Bytes monitor
+     * Used only for statistical purposes
      */
     public static int globaltxnCnt = 0;
 
+    /**
+     * We have a thread for sending data to each registered status oracle.
+     * This thread is called a boradcaster
+     */
     ScheduledExecutorService broadcasters = null;
 
     /**
@@ -91,10 +102,29 @@ public class SequencerHandler extends SimpleChannelHandler {
      */
     private ChannelGroup channelGroup = null;
 
+    /**
+     * We keep a mapping between channels and logreaders.
+     * This is used when an already registered status oracle, request registering 
+     * for the broadcast service.
+     * TODO: not sure if it is needed assuming correct status oracles
+     */
     private Map<Channel, LogReader> channelToReaderMap = new HashMap<Channel, LogReader>();
 
+    /**
+     * There is a single writer for the log. The append method is synchronized to give
+     * a serial order to the messages.
+     */
     LogWriter logWriter;
+
+    /**
+     * logPersister persists the content of the sharedLog into a logBackend
+     */
     LogPersister logPersister;
+
+    /**
+     * the logBackend provides persistent storage for the log content. The logBackend
+     * must be accessible by braodcast registeres, i.e., status oracles.
+     */
     StateLogger logBackend;
 
     /**
@@ -110,7 +140,9 @@ public class SequencerHandler extends SimpleChannelHandler {
         this.logWriter = new LogWriter(sharedLog);
         initLogBackend(zk);
         this.logPersister = new LogPersister(sharedLog, logWriter);
+        //logWriter should be careful not to rewrite the data that is not persisted yet.
         this.logWriter.setPersister(this.logPersister);
+        //1 statistics printing thread
         broadcasters.scheduleAtFixedRate(
                 new Runnable() {
                     @Override
@@ -118,9 +150,15 @@ public class SequencerHandler extends SimpleChannelHandler {
                         Statistics.println();
                     }
                 }, 1, 3000, TimeUnit.MILLISECONDS);
+        //1 persisting thread
         broadcasters.schedule(new PersistenceThread(logPersister), 0, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Init the logBackend medium
+     * The users of logBackend are notified of the init completion by checking
+     * that logBackend is not null
+     */
     void initLogBackend(ZooKeeper zk) {
         try {
             new SyncFileStateLogger(zk).initialize(new LoggerInitCallback() {
@@ -139,10 +177,14 @@ public class SequencerHandler extends SimpleChannelHandler {
             }, null);
         } catch (Exception e) {
             e.printStackTrace();
+            //TODO: react properly
             System.exit(1);
         }
     }
 
+    /**
+     * Assign a reader thread to the channel that is registering for broadcast
+     */
     void initReader(Channel channel, BroadcastJoinRequest msg, FollowedPointer subject) {
         LogReader logReader;
         synchronized (channelToReaderMap) {
@@ -158,9 +200,15 @@ public class SequencerHandler extends SimpleChannelHandler {
         broadcastThread.setControler(schedulerControler);
     }
 
+    /**
+     * A separate BroadcastThread is assigned to each registered status oracle
+     * This thread regularly reads from the sharedlog and push the new content to 
+     * the channel of the assigned status oracle
+     */
     private class BroadcastThread implements Runnable {
         Channel channel;
         LogReader logReader;
+        //Need the schedulerControler pointer to cancel the broadcast
         ScheduledFuture<?> schedulerControler;
         public BroadcastThread(Channel channel, LogReader logReader) {
             this.channel = channel;
@@ -178,11 +226,14 @@ public class SequencerHandler extends SimpleChannelHandler {
                     return;
                 }
                 Thread.sleep(5);//allow the writes to accumulate
-                //inject random errors
+                //TODO: replace the voodo number 5
+                //inject random errors: used for testing
                 if (error()) return;
                 ChannelBuffer tail = logReader.tail();
                 if (tail == null)
                     return;
+                //used for statistical purposes
+                //TODO: replace them with proper Statistics tool
                 TSOSharedMessageBuffer._flushes++;
                 TSOSharedMessageBuffer._flSize += tail.readableBytes();
                 //System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
@@ -209,7 +260,10 @@ public class SequencerHandler extends SimpleChannelHandler {
             return true;
         }
 
-        //in this version, we cleanly anounce the end of broadcast
+        /**
+         * stop the braodcast
+         * in this version, we cleanly anounce the end of broadcast
+         */
         void sendEOB(Channel channel) {
             boolean result = stopBroadcastingTo(channel);
             //if we cannot stop broadcasting, sending EOB messes with semantics
@@ -218,13 +272,19 @@ public class SequencerHandler extends SimpleChannelHandler {
             final long suggestIndexForResume = logPersister.getGlobalPointer();
             System.out.println("sending EOB: suggesting " + suggestIndexForResume);
             EndOfBroadcast eob = new EndOfBroadcast(suggestIndexForResume);
+            //encode the message
+            //TODO: do it in a clean way
             ChannelBuffer buffer = ChannelBuffers.buffer(20);
             buffer.writeByte(TSOMessage.EndOfBroadcast);
             eob.writeObject(buffer);
+            //send the message
             channel.write(buffer);
         }
 
-        //In this version, we close the channel to emulate a channel failure
+        /**
+         * stop broadcast
+         * In this version, we close the channel to emulate a channel failure
+         */
         void simulateFailure(Channel channel) {
             boolean result = stopBroadcastingTo(channel);
             //if we cannot stop broadcasting, sending EOB messes with semantics
@@ -238,6 +298,10 @@ public class SequencerHandler extends SimpleChannelHandler {
             }
         }
 
+        /**
+         * Inject an error: used for testing purposes
+         * @return true if the error is injected
+         */
         boolean error() {
             if (!sent && logPersister.getGlobalPointer() > 50000) {
                 sendEOB(channel);
@@ -252,9 +316,14 @@ public class SequencerHandler extends SimpleChannelHandler {
             return false;
         }
     }
+    //used for testing purposes
     static boolean sent = false;
     static boolean sent2 = false;
 
+    /**
+     * A thread that periodically reads from the sharedLog that persists the recent
+     * writes of the sharedLog
+     */
     private class PersistenceThread implements Runnable {
         LogPersister logPersister;
         public PersistenceThread(LogPersister logPersister) {
@@ -274,8 +343,11 @@ public class SequencerHandler extends SimpleChannelHandler {
                         Thread.yield();
                         continue;
                     }
+                    //keep count for statistical purposes
                     TSOHandler.globaltxnCnt++;
                     ChannelBuffer tail = toBePersistedData.getData();
+                    //TODO: update the logBackend to operate on ChannelBuffer
+                    //this would eliminate the extra copy
                     byte[] record;
                     record = new byte[tail.readableBytes()];
                     tail.readBytes(record);
@@ -288,6 +360,7 @@ public class SequencerHandler extends SimpleChannelHandler {
                                         System.exit(1);
                                         //TODO: handle it properly
                                     } else {
+                                        //update the pointer of the last persisted data
                                         LogPersister.ToBePersistedData toBePersistedData = (LogPersister.ToBePersistedData) ctx;
                                         toBePersistedData.persisted();
                                     }
@@ -335,7 +408,7 @@ public class SequencerHandler extends SimpleChannelHandler {
         //} else if (!(msg instanceof ChannelBuffer)) {
             //System.out.println("WRONG MSG: " + msg);
             //System.out.println("channel: " + ctx.getChannel());
-        } else
+        } else //coming form clients, broadcast it
             multicast((ChannelBuffer)msg);
     }
 
@@ -343,15 +416,18 @@ public class SequencerHandler extends SimpleChannelHandler {
     long writeSize = 0;
     /**
      * Handle a received message
-     * It has to be synchnronized to ensure atmoic broadcast
+     * logWriter.append is synchnronized to ensure atmoic broadcast
      */
     public void multicast(ChannelBuffer buf) {
         writeCnt ++;
         writeSize += buf.readableBytes();
+        //used for statistical purposes
+        //TODO: replace with propoer Statistics methods
         TSOSharedMessageBuffer._Avg2 = writeSize / (float) writeCnt;
         TSOSharedMessageBuffer._Writes = writeSize;
         try {
             TSOHandler.txnCnt++;
+            //append is synchronized to serialize the messages
             logWriter.append(buf);
         } catch (SharedLogException sharedE) {
             //TODO do something
@@ -359,6 +435,10 @@ public class SequencerHandler extends SimpleChannelHandler {
         }
     }
 
+    /**
+     * could be used to nicely stop the entire braodcast
+     * not used yet
+     */
     private boolean finish;
 
     /*

@@ -29,7 +29,7 @@ public interface FollowedPointer {
         throws SharedLogException;
 
     /**
-     * check if the specified range is valid
+     * check if the specified index is valid
      */
     boolean isPointerValid(long globalX);
 }

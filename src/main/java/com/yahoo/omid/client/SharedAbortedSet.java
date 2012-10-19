@@ -22,10 +22,17 @@ import java.util.Queue;
 import java.util.NoSuchElementException;
 import java.util.LinkedList;
 
-/*
+/**
  * A set of aborted transactions that could be accessed by concurrent transactions
- * If a transactin Ta is in the aborted list at the time transaction Tr starts, it must stay there till Tr commits/aborts. This is necessary to avoid the corner cases that Tr reads a value that had been written by Ta but since Ta is not in aborted list anymore, Tr takes the value as committed. Refer to HotDep for furthur details.
- * The trick is to delay removal of aborts until the transactions that started before the remove invocation are finished.
+ * If a transactin Ta is in the aborted list at the time transaction Tr starts, 
+ * it must stay there till Tr commits/aborts. 
+ * This is necessary to avoid the corner cases that Tr reads a value that 
+ * had been written by Ta but since Ta is not in aborted list anymore, 
+ * Tr takes the value as committed. Refer to HotDep for furthur details.
+ * The trick is to delay removal of aborts until the transactions that 
+ * started before the remove invocation are finished.
+ *
+ * @author maysam
  */
 public class SharedAbortedSet {
     protected Set<Long> aborted = new HashSet<Long>(1000);

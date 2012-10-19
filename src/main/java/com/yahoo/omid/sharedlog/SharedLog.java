@@ -66,7 +66,7 @@ public class SharedLog {
     /**
      * Write the input conent at the specified pointer.
      * Wrap around the log if there is no enough space
-     * assume: the contents read pointer moves forwardard by setBytes call
+     * assume: the contents read pointer moves forward by setBytes call
      */
     public void writeAt(long globalPointer, ChannelBuffer content) 
     throws SharedLogException {
@@ -91,7 +91,7 @@ public class SharedLog {
      * read the specified range from the log and return a copy
      * Note: we could return slice which is more efficient under the condition
      * that we ensure that it will be verified after the final usage. Since this is not
-     * always feasible, we simply return a copy.
+     * always feasible, the default is to return a copy (i.e., IMMUTABLE_READ)
      */
     public ChannelBuffer read(LogRange range) {
         int x = range.getStart();

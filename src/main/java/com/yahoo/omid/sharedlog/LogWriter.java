@@ -22,11 +22,15 @@ import org.jboss.netty.buffer.ChannelBuffer;
 /**
  * A writer to a shared log
  * Its writes also could be followed
+ * This class is designed to avoid locks. The followers use the next pointer to see if 
+ * their reads are still valid: see isPointerValid
  */
 public class LogWriter implements FollowedPointer {
     final private SharedLog log;
     /**
      * Last index that is written
+     * There is only one writer at a time
+     * It is atomic, since could could be concurrently read by readers
      */
     private AtomicLong atomicGlobalPointer;
     /**
@@ -87,7 +91,7 @@ public class LogWriter implements FollowedPointer {
     }
 
     /**
-     * check if the specified range is valid
+     * check if the specified index is valid
      */
     @Override
     public boolean isPointerValid(long globalX) {

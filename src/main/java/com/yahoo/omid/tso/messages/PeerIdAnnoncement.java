@@ -25,6 +25,8 @@ import com.yahoo.omid.tso.TSOMessage;
 
 /**
  * The message object for annoncing the id to the peer
+ * This is useful in indirect communication, when we maintain a mapping between
+ * peerIds and their corresponding channels
  * @author maysam
  *
  */
@@ -58,9 +60,6 @@ public class PeerIdAnnoncement extends SizedTSOMessage implements TSOMessage {
     @Override
     public void readObject(ChannelBuffer aInputStream) throws IOException {
         peerId = aInputStream.readInt();
-        //TODO: improvisation to make it work with fake PeerIdAnnoncement
-        //It should be removed later
-        setSize(1 /*type*/ + 4 /*peerId*/);
     }
 
     @Override

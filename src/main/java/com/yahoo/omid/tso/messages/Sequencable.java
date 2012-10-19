@@ -20,6 +20,7 @@ import com.yahoo.omid.tso.TSOMessage;
 
 /**
  * The message object for sending a timestamp request to TSO
+ * The sequence uniquely identifies the request (as well as its response)
  * @author maysam
  *
  */

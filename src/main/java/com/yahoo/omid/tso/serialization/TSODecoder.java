@@ -174,6 +174,8 @@ public class TSODecoder extends FrameDecoder {
         return msg;
     }
 
+    //TODO: the compression function should be centralized in another class,
+    //it should not be spread all over the project
     private TSOMessage readAbortTransactionReport(byte type, ChannelBuffer ostream) {
         int diff = (((type & 0x1f) << 27) >> 27);
         TSOMessage msg;

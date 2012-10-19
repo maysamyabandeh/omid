@@ -25,7 +25,7 @@ import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.TSOMessage;
 
 /**
- * The message object for sending a commit request to multiple TSO
+ * The message object for sending a commit request to multiple TSOs
  * The difference with CommitRequest is that it has a vector timestamp
  * @author maysam
  *

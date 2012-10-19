@@ -20,7 +20,6 @@ import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
 import com.yahoo.omid.tso.serialization.TSODecoder;
 import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.tso.messages.EndOfBroadcast;
-import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.TSOHandler;
 import com.yahoo.omid.tso.TSOState;
 import com.yahoo.omid.tso.TSOMessage;
@@ -71,10 +70,17 @@ import java.io.FileNotFoundException;
 public class SequencerClient extends BasicClient {
     private static final Log LOG = LogFactory.getLog(TSOClient.class);
 
-    //needed to create TSOHandler
+    //needed to create a new TSOHandler
     TSOState tsoState;
     ChannelGroup channelGroup;
+    /**
+     * a TSOHandler to service that messages are received through the sequencer
+     */
     TSOHandler tsoHandler;
+    /**
+     * the loopback that is used to feed the read messages from the backend into
+     * the netty pipeline
+     */
     PipedOutputStream loopbackDataProvider = null;
 
     /**
@@ -86,6 +92,11 @@ public class SequencerClient extends BasicClient {
      */
     long lastReadIndex = 0;
 
+    /**
+     * If the sequencer advances our speed to a level that it does not have the 
+     * next broadcasted message in its history, we can read the missed messages
+     * from the logBackend via this logBackendReader
+     */
     LogBackendReader logBackendReader;
 
     /**
@@ -173,7 +184,7 @@ public class SequencerClient extends BasicClient {
     }
 
     /**
-     * Send the id to the peer of the connection
+     * request to receive broadcast messages starting from lastReadIndex stream
      */
     void registerForBroadcast(long lastReadIndex) throws IOException {
         System.out.println("registerForBroadcast " + lastReadIndex);
@@ -308,7 +319,7 @@ public class SequencerClient extends BasicClient {
      * This has to be synchronized since could be called concurrently by both
      * (i) after servicing the last message
      * (ii) after rangeReadComplete
-     * We need to invoke resume check after these two points since depends on 
+     * We need to invoke check after these two points since depends on 
      * concurrency either could be run first
      */
     synchronized

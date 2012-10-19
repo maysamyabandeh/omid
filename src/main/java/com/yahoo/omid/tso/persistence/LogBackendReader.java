@@ -24,7 +24,7 @@ public interface LogBackendReader {
 
     /**
      * Read a range of bytes from the log backend
-     * Since the data might be written as separate entries into the lock backend, 
+     * Since the data might be written as separate entries into the log backend, 
      * to read complete entries, we might need to read over the range limits.
      * In this case, the callback specifies the last read index
      * 

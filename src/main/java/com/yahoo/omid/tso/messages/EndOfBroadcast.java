@@ -24,7 +24,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import com.yahoo.omid.tso.TSOMessage;
 
 /**
- * The message object for registering for a broadcast stream
+ * The message object for annoncing the end of braodcast to a particular channel.
  * @author maysam
  */
 public class EndOfBroadcast extends SizedTSOMessage implements TSOMessage {

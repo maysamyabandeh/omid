@@ -22,9 +22,12 @@ import java.util.Queue;
 import java.util.NoSuchElementException;
 import java.util.LinkedList;
 
-//This class enables queues with efficient random deletes
-//The deletes are delayed until they reach the head of the queue
-//The top is always valid (not deleted)
+/** 
+ * This class enables queues with efficient random deletes
+ * The deletes are delayed until they reach the head of the queue
+ * The top is always valid (not deleted)
+ * @author: maysam
+ */
 public class DeleteEfficientQueue<E> {
     protected Queue<E> queue;
     protected Set<E> deletedSet;

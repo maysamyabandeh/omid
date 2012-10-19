@@ -31,6 +31,9 @@ public class LogReader {
      * last read index
      */
     private long globalPointer;
+    /**
+     * the last read data is in the range between lastGlobalPointer and globalPointer
+     */
     private long lastGlobalPointer;
     private FollowedPointer subject;
 
@@ -58,7 +61,9 @@ public class LogReader {
         ChannelBuffer buffer = log.read(range);
         lastGlobalPointer = globalPointer;
         globalPointer += buffer.readableBytes();
-        if (SharedLog.IMMUTABLE_READ)
+        //concurrency check: since we do not use locks, we should check the read content
+        //was not being modified concurrently
+        if (SharedLog.IMMUTABLE_READ) //then do the check now
             verifyLastRead();
         //otherwise, the verification should be called when the user eventually finishes consuming the read data
         return buffer;

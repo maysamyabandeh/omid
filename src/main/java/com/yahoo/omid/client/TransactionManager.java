@@ -55,17 +55,36 @@ import org.apache.hadoop.hbase.client.HTable;
 public class TransactionManager {
     private static final Log LOG = LogFactory.getLog(TSOClient.class);
 
+    /**
+     * This lock is used to synchronized initialization of shared, static vars
+     */
     private static Object lock = new Object();
     private Configuration conf;
     private HashMap<byte[], HTable> tableCache;
+    /**
+     * A mapping between the key-range of the partitions and the clients that 
+     * interface with the corresponding status oracles
+     * We use TreeMap structure to ficiliate efficient search for a covering key-range
+     */
     private static TreeMap<KeyRange,TSOClient> sortedRangeClientMap = null;
+    /**
+     * The client that interfaces with the sequencer (i.e., broadcaster).
+     * We simply reuse TSOClient class, since the required functionality is
+     * already coveered with TSOClient.
+     */
     private static TSOClient sequencerClient;
+    /**
+     * We need sequences to uniqly label our requests.
+     * e.g., a timestamp request that is sent to multiple status oracles.
+     * The sequence is later used to identify the corresponding responses 
+     */
     private static AtomicLong sequenceGenerator = new AtomicLong();
 
     public TransactionManager(Configuration conf) 
         throws TransactionException, IOException {
         this.conf = conf;
-        java.util.Iterator<Map.Entry<String,String>> confIterator = conf.iterator();
+        //read the setup configuration from the zookeeper and connect to the sequencer
+        //as well as the status oracles
         synchronized (lock) {
             try {
                 if (sortedRangeClientMap == null) {
@@ -84,6 +103,8 @@ public class TransactionManager {
                     int i = 0;
                     int id = BasicClient.generateUniqueId();
                     boolean introduceYourself = true;
+                    //a client must not send introduction messages to the sequencer
+                    //otherwise such message would be broadcasted to all the status oracles
                     sequencerClient = new TSOClient(omidConf.getSequencerConf(), id, !introduceYourself, sequenceGenerator);
                     for (Map.Entry<KeyRange,Properties> entry: sortedRangePropMap.entrySet()) {
                         TSOClient handler = new TSOClient(entry.getValue(), id, introduceYourself, sequenceGenerator);
@@ -99,25 +120,47 @@ public class TransactionManager {
         tableCache = new HashMap<byte[], HTable>();
     }
 
+    /**
+     * Used to make decision about the type of the next transaction: local vs. global
+     */
     boolean lastLocalTxnFailed = true;
-
     void reportFailedPartitioning() {
         lastLocalTxnFailed = true;
     }
 
+    /**
+     * used to make decision about the next selected partition for the next txn
+     */
     KeyRange lastUsedKeyRange = null;
-    TSOClient lastUsedTSOClient = null;
     TreeMap<KeyRange,Long> usageHistory = new TreeMap<KeyRange,Long>();
-    void reportLastUsedPartition(KeyRange keyRange, TSOClient tsoClient) {
+    void reportLastUsedPartition(KeyRange keyRange) {
         lastUsedKeyRange = keyRange;
-        lastUsedTSOClient = tsoClient;
         Long usageCount = usageHistory.get(keyRange);
         usageHistory.put(keyRange, usageCount == null ? 1 : usageCount+1);
     }
 
     /**
+     * @return the most frequently used keyrange
+     * useful to implement the policy of selecting the most used partition
+     * This policy makes sense if a client sticks to a single partition for most 
+     * of its traffic
+     */
+    protected KeyRange getMostFrequentKeyRange() {
+        KeyRange mostFrequentKeyRange = null;
+        Long mostFrequentUsage = null;
+        for (Map.Entry<KeyRange,Long> entry: usageHistory.entrySet()) {
+            if (mostFrequentUsage == null || entry.getValue() > mostFrequentUsage) {
+                mostFrequentUsage = entry.getValue();
+                mostFrequentKeyRange = entry.getKey();
+            }
+        }
+        return mostFrequentKeyRange;
+    }
+
+    /**
      * This method implement the policy to choose a partition for the transaction
-     * @return the TSOClient that is the interface to the selected partition
+     * @return the partition keyrange and the TSOClient that is the interface 
+     * to the selected partition
      */
     protected Map.Entry<KeyRange,TSOClient> selectAPartition() {
         Map.Entry<KeyRange,TSOClient> chosen = null;
@@ -129,18 +172,6 @@ public class TransactionManager {
         }
         //System.out.println("CHOSEN: " + chosen.getKey() + " " + chosen.getValue());
         return chosen;
-    }
-
-    protected KeyRange getMostFrequentKeyRange() {
-        KeyRange mostFrequentKeyRange = null;
-        Long mostFrequentUsage = null;
-        for (Map.Entry<KeyRange,Long> entry: usageHistory.entrySet()) {
-            if (mostFrequentUsage == null || entry.getValue() > mostFrequentUsage) {
-                mostFrequentUsage = entry.getValue();
-                mostFrequentKeyRange = entry.getKey();
-            }
-        }
-        return mostFrequentKeyRange;
     }
 
     /**
@@ -172,13 +203,13 @@ public class TransactionManager {
         }
 
         TimestampResponse pong = cb.getPong();
+        //required to efficiently keep track of aborted transactions
         tsoclient.aborted.aTxnStarted(pong.timestamp);
         return new TransactionState(pong.timestamp, tsoclient, keyRange, this);
     }
 
     /**
      * start a global transaction
-     * update the content of transactionState accordingly
      */
     public TransactionState beginGlobalTransaction() throws TransactionException {
         boolean failed = false;
@@ -205,16 +236,17 @@ public class TransactionManager {
         if (failed)
             throw new TransactionException("Error retrieving timestamp for a global transaction", null);
         //keep track of started transactions
-        long[] ts = new long[tscbs.length];
+        long[] vts = new long[tscbs.length];
         for (int i = 0; i < tscbs.length; i++)
-            ts[i] = tscbs[i].getPong().timestamp;
+            vts[i] = tscbs[i].getPong().timestamp;
         int i = 0;
+        //required to efficiently keep track of aborted transactions
         for (TSOClient tsoClient: sortedRangeClientMap.values()) {
-            tsoClient.aborted.aTxnStarted(ts[i]);
+            tsoClient.aborted.aTxnStarted(vts[i]);
             i++;
         }
 
-        return new TransactionState(sequence, ts, sortedRangeClientMap, this);
+        return new TransactionState(sequence, vts, sortedRangeClientMap, this);
     }
 
     /**
@@ -383,6 +415,7 @@ public class TransactionManager {
     public void abort(TransactionState transactionState) throws TransactionException {
         if (transactionState.txnState.isGlobal()) {
             LOG.error("local aborting of a global transaction!");
+            //TODO: implement global abort
             //tryGlobalAbort(transactionState);
             return;
         }

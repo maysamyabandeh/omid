@@ -67,6 +67,11 @@ import org.jboss.netty.handler.codec.replay.ReplayingDecoder;
 
 import com.yahoo.omid.tso.SequencerHandler;
 
+/**
+ * This decoder is used by the sequencer, the node that broadcast the recieved messages.
+ * It is designed to avoid decoding of the message content, and simply detect only 
+ * the boundries
+ */
 public class SeqDecoder extends FrameDecoder {
     private static final Log LOG = LogFactory.getLog(SeqDecoder.class);
 
@@ -87,7 +92,7 @@ WHILE:
                 switch (type) {
                     case TSOMessage.TimestampRequest:
                     case TSOMessage.MultiCommitRequest:
-                        int size = buf.readShort()-1-2;//alread read type and size
+                        int size = buf.readShort()-1-2;//already has read type and size
                         if (size > buf.readableBytes()) {//avoid exception
                             buf.resetReaderIndex();
                             break WHILE;

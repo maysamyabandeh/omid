@@ -26,16 +26,33 @@ import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.IsolationLevel;
 
 //TODO: rename TransactionState to TxnStateRef
+/**
+ * For MegaOmid, the new implementation of TransactionState is actually a pointer
+ * to the real state (i.e., TxnState), which could be a partition-specific state
+ * or a global state, depending on the transaction type.
+ */
 public class TransactionState {
     TxnState txnState;
+    /**
+     * We need a pointer to the manager to properly report violations over the 
+     * partition range. The manager could use this info to decide on the next
+     * transaction type/partition.
+     */
     TransactionManager txnManager;
 
+    /**
+     * create a new local state for a particular partition
+     */
     TransactionState(long ts, TSOClient tsoClient, KeyRange keyRange, 
             TransactionManager txnManager) {
         txnState = new TxnPartitionState(ts, tsoClient, keyRange);
         this.txnManager = txnManager;
     }
 
+    /**
+     * create a new global state for a global transaction
+     * covering all partitions
+     */
     TransactionState(long sequence, long[] vts, 
             TreeMap<KeyRange,TSOClient> sortedRangeClientMap,
             TransactionManager txnManager) {
@@ -43,11 +60,19 @@ public class TransactionState {
         this.txnManager = txnManager;
     }
 
+    /**
+     * @return any of the covered partitions
+     */
     public TxnPartitionState getPartition()
         throws TransactionException {
         return getPartition(null);
     }
 
+    /**
+     * @return the partition that contains the rowKey
+     * If there is no such partition covered under this transaction,
+     * an exception is thrown
+     */
     public TxnPartitionState getPartition(RowKey rowKey)
         throws TransactionException {
         TxnPartitionState tps = txnState.getPartition(rowKey);
@@ -55,8 +80,8 @@ public class TransactionState {
             txnManager.reportFailedPartitioning();
             throw new InvalidTxnPartitionException("Need to start a global transaction");
         }
-        txnManager.reportLastUsedPartition(tps.keyRange, tps.tsoclient);
-        //System.out.println("LAST: [" + (txnState.isGlobal() ? 'G' : 'L') + "] (key=" + rowKey + ") " + tps.keyRange + " " + tps.tsoclient);
+        txnManager.reportLastUsedPartition(tps.keyRange);
+        //System.out.println("LAST: [" + (txnState.isGlobal() ? 'G' : 'L') + "] (key=" + rowKey + ") " + tps.keyRange);
         return tps;
     }
 
@@ -65,16 +90,37 @@ public class TransactionState {
      */
     static abstract class TxnState {
         public abstract boolean isGlobal();
+        /**
+         * @return the partition that contains the rowKey, 
+         * or any partition if rowKey is null
+         *
+         * If there is no such partition covered under this transaction,
+         * an exception is thrown
+         */
         public abstract TxnPartitionState getPartition(final RowKey rowKey) 
             throws TransactionException;
     }
 
     /**
-     * The global state of the txn
+     * The global state of a global txn
+     * This state covers multiple paritions
      */
     static class TxnGlobalState extends TxnState {
+        /**
+         * The state of each partition covered by this transaction is kept in the
+         * following map. For example, commit timestamp.
+         */
         private NavigableMap<KeyRange,TxnPartitionState> partitions;
+        /**
+         * The sequence accociated with the start timestamp.
+         * The sequnce is unique per client
+         */
         private long sequence;
+
+        /**
+         * The vector state timestamp of the global transaction
+         * i.e., one timestamp for each parititon
+         */
         long[] vts;
 
         public TxnGlobalState(long sequence, long[] vts, TreeMap<KeyRange,TSOClient> sortedRangeClientMap) {
@@ -83,7 +129,7 @@ public class TransactionState {
             partitions = new TreeMap();
             int i = 0;
             for (Map.Entry<KeyRange,TSOClient> entry: sortedRangeClientMap.entrySet()) {
-                TxnPartitionState pstate = 
+                TxnPartitionState pstate =
                     new TxnPartitionState(vts[i], entry.getValue(), entry.getKey());
                 partitions.put(entry.getKey(), pstate);
                 i++;
@@ -98,10 +144,12 @@ public class TransactionState {
             return partitions;
         }
 
+        @Override
         public TxnPartitionState getPartition(final RowKey key)
             throws TransactionException {
             Map.Entry<KeyRange,TxnPartitionState> entry;
             if (key == null) {
+                //return any partition
                 entry = partitions.firstEntry();
             } else {
                 KeyRange keyRange = new KeyRange(key);
@@ -127,6 +175,9 @@ public class TransactionState {
         private long commitTimestamp;
         private Set<RowKeyFamily> writtenRows = new HashSet<RowKeyFamily>();
         private Set<RowKey> readRows = new HashSet<RowKey>();
+        /**
+         * The TSOClient associated with this partition
+         */
         TSOClient tsoclient;
 
         TxnPartitionState(long startTimestamp, TSOClient client, KeyRange keyRange) {
@@ -136,6 +187,7 @@ public class TransactionState {
             this.keyRange = keyRange;
         }
 
+        @Override
         public TxnPartitionState getPartition(final RowKey key)
             throws TransactionException {
             if (key == null || keyRange.includes(key))
