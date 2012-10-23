@@ -37,7 +37,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import org.jboss.netty.channel.Channel;
-import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.PrepareCommit;
 import com.yahoo.omid.client.TSOClient;
 import java.util.concurrent.Executors;
@@ -46,6 +45,16 @@ import java.util.Iterator;
 import java.util.Properties;
 import java.io.IOException;
 import com.yahoo.omid.tso.messages.MultiCommitRequest;
+import com.yahoo.omid.sharedlog.*;
+import com.yahoo.omid.tso.persistence.StateLogger;
+import com.yahoo.omid.tso.persistence.SyncFileStateLogger;
+import org.apache.zookeeper.ZooKeeper;
+import java.util.concurrent.ScheduledExecutorService;
+import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.LoggerInitCallback;
+import com.yahoo.omid.tso.persistence.LoggerException;
+import com.yahoo.omid.tso.persistence.LoggerException.Code;
+import org.jboss.netty.buffer.ChannelBuffer;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * The wrapper for different states of TSO
@@ -55,12 +64,6 @@ import com.yahoo.omid.tso.messages.MultiCommitRequest;
 public class TSOState {
     private static final Log LOG = LogFactory.getLog(TSOState.class);
     
-    /**
-     * The mapping between the client channels and their correspondign pointer on
-     * the shared message buffer
-     */
-    public Map<Channel, ReadingBuffer> messageBuffersMap = new HashMap<Channel, ReadingBuffer>();
-
     /**
      * The mapping between client Ids to their corresponding channel
      */
@@ -123,13 +126,141 @@ public class TSOState {
     * Object that implements the logic to log records
     * for recoverability
     */
-   
+  //depricated 
    StateLogger logger;
 
+    /**
+     * The sharedLog is a lock-free log that keeps the recent sequenced messages
+     * The readers read messages from this log and send it to the registered SOs
+     */
+    SharedLog sharedLog;
+
+   /**
+    * There is a single writer for the log. The append method is synchronized to give
+    * a serial order to the messages.
+    * @author maysam
+    */
+   LogWriter logWriter;
+
+   /**
+    * logPersister persists the content of the sharedLog into a logBackend
+    * @author maysam
+    */
+   LogPersister logPersister;
+
+   /**
+    * the logBackend provides persistent storage for the log content. The logBackend
+    * must be accessible by braodcast registeres, i.e., status oracles.
+    * @author maysam
+    */
+   StateLogger logBackend;
+
+    /**
+     * Init the logBackend medium
+     * The users of logBackend are notified of the init completion by checking
+     * that logBackend is not null
+     * @author maysam
+     */
+    void initLogBackend(ZooKeeper zk) {
+        try {
+            new SyncFileStateLogger(zk).initialize(new LoggerInitCallback() {
+                public void loggerInitComplete(int rc, StateLogger sl, Object ctx){
+                    if(rc == Code.OK){
+                        if(LOG.isDebugEnabled()){
+                            LOG.debug("Logger is ok.");
+                        }
+                        LOG.warn("backend loggerInitComplete: OK");
+                        logBackend = sl;
+                    } else {
+                        LOG.error("Error when initializing logger: " + LoggerException.getMessage(rc));
+                    }
+                }
+
+            }, null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            //TODO: react properly
+            System.exit(1);
+        }
+    }
+
+    /**
+     * We keep a mapping between channels and logreaders.
+     */
+    Map<Channel, LogReader> channelToReaderMap = new HashMap<Channel, LogReader>();
+
+    private ScheduledExecutorService executor;
+    /**
+     * A thread that periodically reads from the sharedLog that persists the recent
+     * writes of the sharedLog
+     */
+    private class PersistenceThread implements Runnable {
+        LogPersister logPersister;
+        public PersistenceThread(LogPersister logPersister) {
+            this.logPersister = logPersister;
+        }
+        @Override
+        public void run() {
+            for (;;) {
+                try {
+                    if (logBackend == null) {
+                        System.out.println("Wait more for the log backend ...");
+                        Thread.sleep(100);
+                        continue;
+                    }
+                    LogPersister.ToBePersistedData toBePersistedData = logPersister.toBePersisted();
+                    if (toBePersistedData == null) {
+                        Thread.yield();
+                        continue;
+                    }
+                    //keep count for statistical purposes
+                    TSOHandler.globaltxnCnt++;
+                    ChannelBuffer tail = toBePersistedData.getData();
+                    //TODO: update the logBackend to operate on ChannelBuffer
+                    //this would eliminate the extra copy
+                    byte[] record;
+                    record = new byte[tail.readableBytes()];
+                    tail.readBytes(record);
+                    logBackend.addRecord(record, 
+                            new AddRecordCallback() {
+                                @Override
+                                public void addRecordComplete(int rc, Object ctx) {
+                                    if (rc != Code.OK) {
+                                        LOG.error("Writing to log backend failed: " + LoggerException.getMessage(rc));
+                                        System.exit(1);
+                                        //TODO: handle it properly
+                                    } else {
+                                        //update the pointer of the last persisted data
+                                        LogPersister.ToBePersistedData toBePersistedData = (LogPersister.ToBePersistedData) ctx;
+                                        toBePersistedData.persisted();
+                                    }
+                                }
+                            }, toBePersistedData);
+                    Thread.sleep(TSOState.FLUSH_TIMEOUT);
+                } catch (SharedLogLateFollowerException lateE) {
+                    //TODO do something
+                    lateE.printStackTrace();
+                } catch (SharedLogException sharedE) {
+                    //TODO do something
+                    sharedE.printStackTrace();
+                //} catch (IOException ioE) {
+                    ////TODO do something
+                    //ioE.printStackTrace();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+
+
+    //@depricated
    public StateLogger getLogger(){
        return logger;
    }
    
+    //@depricated
    public void setLogger(StateLogger logger){
        this.logger = logger;
    }
@@ -223,6 +354,7 @@ public class TSOState {
     * @param cb
     * @param ctx
     */
+    //@depricated
    public void addRecord(byte[] record, final AddRecordCallback cb, Object ctx) {
        if(logger != null){
            logger.addRecord(record, cb, ctx);
@@ -234,27 +366,16 @@ public class TSOState {
    /**
     * Closes this state object.
     */
+    //@depricated
    void stop(){
        if(logger != null){
            logger.shutdown();
        }
    }
    
-   /*
-    * WAL related pointers
-    */
-   public static int BATCH_SIZE = 0;//in bytes
-   public ByteArrayOutputStream baos = new ByteArrayOutputStream();
-   public DataOutputStream toWAL = new DataOutputStream(baos);
-   public List<TSOHandler.ChannelandMessage> nextBatch = new ArrayList<TSOHandler.ChannelandMessage>();
-   
    public TSOState(StateLogger logger, TimestampOracle timestampOracle) {
-       this.timestampOracle = timestampOracle;
-       this.largestDeletedTimestamp = this.timestampOracle.get();
-       this.uncommited = new Uncommited(largestDeletedTimestamp);
-       this.elders = new Elders();
+       this(timestampOracle);
        this.logger = logger;
-       startsLockMonitor();
    }
    
    public TSOState(TimestampOracle timestampOracle) {
@@ -264,6 +385,23 @@ public class TSOState {
        this.elders = new Elders();
        this.logger = null;
        startsLockMonitor();
+
+       //init the new implementation of the shared message buffer
+       this.sharedLog = new SharedLog();
+       this.logWriter = new LogWriter(sharedLog);
+       this.logPersister = new LogPersister(sharedLog, logWriter);
+       //logWriter should be careful not to rewrite the data that is not persisted yet.
+       this.logWriter.setPersister(this.logPersister);
+       this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
+           @Override
+           public Thread newThread(Runnable r) {
+               Thread t = new Thread(Thread.currentThread().getThreadGroup(), r);
+               t.setDaemon(true);
+               t.setName("Flush Thread");
+               return t;
+           }
+       });
+       executor.schedule(new PersistenceThread(logPersister), 0, TimeUnit.MILLISECONDS);
     }
 
     /**

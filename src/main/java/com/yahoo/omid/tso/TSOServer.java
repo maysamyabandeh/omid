@@ -46,6 +46,7 @@ import org.jboss.netty.handler.codec.serialization.ObjectEncoder;
 import org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor;
 
 import com.yahoo.omid.tso.persistence.BookKeeperStateBuilder;
+import org.apache.zookeeper.ZooKeeper;
 
 /**
  * TSO Server with serialization
@@ -139,18 +140,28 @@ public class TSOServer implements Runnable {
         // Memory limitation: 1MB by channel, 1GB global, 100 ms of timeout
         ThreadPoolExecutor pipelineExecutor = new OrderedMemoryAwareThreadPoolExecutor(maxThreads, 1048576, 1073741824, 100, TimeUnit.MILLISECONDS, Executors.defaultThreadFactory());
 
+        ZooKeeper zk = null;
+        try {
+            zk = new ZooKeeper(config.getZkServers(), 
+                    Integer.parseInt(System.getProperty("SESSIONTIMEOUT", Integer.toString(10000))), 
+                    null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
         // The wrapper for the shared state of TSO
         state = BookKeeperStateBuilder.getState(this.config);
         state.setId(config.getId());
         state.initSequencerClient(sequencerConf);
+        state.initLogBackend(zk);
         
         if(state == null){
             LOG.error("Couldn't build state");
             return;
         }
-        TSOState.BATCH_SIZE = config.getBatchSize();
+        //TSOState.BATCH_SIZE = config.getBatchSize();
         System.out.println("PARAM MAX_ITEMS: " + TSOState.MAX_ITEMS);
-        System.out.println("PARAM BATCH_SIZE: " + TSOState.BATCH_SIZE);
+        //System.out.println("PARAM BATCH_SIZE: " + TSOState.BATCH_SIZE);
         System.out.println("PARAM LOAD_FACTOR: " + TSOState.LOAD_FACTOR);
         System.out.println("PARAM MAX_THREADS: " + maxThreads);
 

@@ -61,8 +61,9 @@ public class TimestampOracle {
     public long next(DataOutputStream toWal) throws IOException {
         last++;
         if (last >= maxTimestamp) {
-            toWal.writeByte(LoggerProtocol.TIMESTAMPORACLE);
-            toWal.writeLong(last);
+            //TODO: the last timestamp could be recovered from the commit entries
+            //toWal.writeByte(LoggerProtocol.TIMESTAMPORACLE);
+            //toWal.writeLong(last);
             maxTimestamp += TIMESTAMP_BATCH;
         }
         if(LOG.isTraceEnabled()){
