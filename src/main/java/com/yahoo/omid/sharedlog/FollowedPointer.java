@@ -32,4 +32,10 @@ public interface FollowedPointer {
      * check if the specified index is valid
      */
     boolean isPointerValid(long globalX);
+
+    /**
+     * This pointer could be leveraged for debugging or further extensions to the tool
+     */
+    long getGlobalPointer();
+
 }

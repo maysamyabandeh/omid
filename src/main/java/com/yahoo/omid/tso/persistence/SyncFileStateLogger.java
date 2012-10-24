@@ -74,7 +74,11 @@ public class SyncFileStateLogger implements StateLogger {
      */
     @Override
     public void initialize(final LoggerInitCallback cb, Object ctx) throws LoggerException {
-        final String path = LoggerConstants.OMID_NFS_PATH + "/" + LoggerConstants.OMID_SEQUENCERLEDGER_ID_PATH;
+        initialize(cb, ctx, LoggerConstants.OMID_SEQUENCERLEDGER_ID_PATH);
+    }
+
+    public void initialize(final LoggerInitCallback cb, Object ctx, String filename) throws LoggerException {
+        final String path = LoggerConstants.OMID_NFS_PATH + "/" + filename;
         final boolean APPEND = true;
         File fileRef = new File(path);
         try {

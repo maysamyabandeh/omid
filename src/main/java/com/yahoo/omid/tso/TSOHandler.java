@@ -81,6 +81,7 @@ import com.yahoo.omid.sharedlog.*;
 
 /**
  * ChannelHandler for the TSO Server
+ * NOTE: Not thread-safe
  * @author maysam
  *
  */
@@ -114,10 +115,6 @@ public class TSOHandler extends SimpleChannelHandler {
      * The wrapper for the shared state of TSO
      */
     private TSOState sharedState;
-
-    //private FlushThread flushThread;
-    //TODO: what if we have multiple instance of TSOHandler?
-    //private ScheduledFuture<?> flushFuture;
 
     /**
      * Constructor
@@ -290,11 +287,17 @@ public class TSOHandler extends SimpleChannelHandler {
             if (tail != null)
                 channel.write(tail);
         } catch (SharedLogLateFollowerException lateE) {
-            //TODO: reset the connection
-            System.exit(1);
+            //reset connection to the client
+            channel.close();
+            synchronized (sharedState.channelToReaderMap) {
+                sharedState.channelToReaderMap.remove(channel);
+            }
         } catch (SharedLogException sharedE) {
-            //TODO: reset the connection
-            System.exit(1);
+            //reset connection to the client
+            channel.close();
+            synchronized (sharedState.channelToReaderMap) {
+                sharedState.channelToReaderMap.remove(channel);
+            }
         }
 
         channel.write(response);
@@ -353,13 +356,16 @@ public class TSOHandler extends SimpleChannelHandler {
             reply.committed = prepareCommit(msg.getStartTimestamp(), msg.readRows, msg.writtenRows);
         try {
             if (reply.committed) {
-                if (msg.writtenRows.length > 0)
+                if (msg.writtenRows.length > 0) {
                     doCommit(msg, reply);
-                else
+                }
+                else {
                     reply.commitTimestamp = msg.getStartTimestamp();//default: Tc=Ts for read-only
+                }
             }
-            else
+            else {
                 doAbort(msg, reply);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -569,9 +575,18 @@ public class TSOHandler extends SimpleChannelHandler {
      * send the response to the client
      */
     private void sendResponse(Channel channel, CommitResponse reply) {
-        //ChannelandMessage cam = new ChannelandMessage(channel, reply);
-        //TODO: linger the response till you get ack from logPersister
-        channel.write(reply);
+        if (somethingIsLogged) {
+            long writeIndex = sharedState.logWriter.getGlobalPointer();
+            sharedState.outMsgs.add(new TSOState.ToBeLoggedMessage(
+                        reply, channel, writeIndex));
+            //maybe the logging was so fast the pending content is already logged
+            //give it a check
+            sharedState.letPersistedMessagesGo();
+        } else {
+            channel.write(reply);
+        }
+        somethingIsLogged = false;//reset it
+        //The message will be sent, after the refered index in the log is persisted
     }
 
     boolean checkForConflictsIn(RowKey[] rows, long startTimestamp, boolean committed, boolean isAlreadyLocked) {
@@ -692,12 +707,20 @@ public class TSOHandler extends SimpleChannelHandler {
   //}
 
     /**
+     * Used to check if anything is logged during the process of this message
+     * e.g., if nothing is logged for a readonly message, do not have to wait
+     * for persistence of log
+     */
+    boolean somethingIsLogged = false;
+    /**
      * This is a temp buffer used pass the encoded message to the log
      */
     ChannelBuffer tempLogBuffer = ChannelBuffers.buffer(50);
     //30 is overestimation of tr size
     private void logIt(ChannelBuffer buf) {
+        somethingIsLogged = true;
         try {
+            //System.out.println("logIt");
             sharedState.logWriter.append(buf);
         } catch (SharedLogException e) {
             e.printStackTrace();

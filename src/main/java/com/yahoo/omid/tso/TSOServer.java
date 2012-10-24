@@ -153,6 +153,7 @@ public class TSOServer implements Runnable {
         state = BookKeeperStateBuilder.getState(this.config);
         state.setId(config.getId());
         state.initSequencerClient(sequencerConf);
+        //initLogBackend must be called after setId
         state.initLogBackend(zk);
         
         if(state == null){

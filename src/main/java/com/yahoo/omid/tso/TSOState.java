@@ -55,6 +55,8 @@ import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
 import org.jboss.netty.buffer.ChannelBuffer;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.PriorityBlockingQueue;
+import com.yahoo.omid.tso.persistence.LoggerConstants;
 
 /**
  * The wrapper for different states of TSO
@@ -176,7 +178,7 @@ public class TSOState {
                     }
                 }
 
-            }, null);
+            }, null, LoggerConstants.OMID_TSO_LOG + getId());
         } catch (Exception e) {
             e.printStackTrace();
             //TODO: react properly
@@ -188,6 +190,58 @@ public class TSOState {
      * We keep a mapping between channels and logreaders.
      */
     Map<Channel, LogReader> channelToReaderMap = new HashMap<Channel, LogReader>();
+
+    /**
+     * This class associates a message to an index in the log
+     * Is used to linger transmission of the message before the corresponding
+     * index is persisted.
+     */
+    static class ToBeLoggedMessage implements Comparable<ToBeLoggedMessage> {
+        TSOMessage msg;
+        Channel channel;
+        /**
+         * The log index asscociated with the message.
+         * @assume: globalLogPointer >= actual index corresponding to the message
+         */
+        long globalLogPointer;
+
+        ToBeLoggedMessage(TSOMessage msg, Channel channel, long index) {
+            this.msg = msg;
+            this.channel = channel;
+            this.globalLogPointer = index;
+        }
+
+        void send() {
+            channel.write(msg);
+            channel = null;//raise an exception if to be sent again
+        }
+
+        @Override
+        public int compareTo(ToBeLoggedMessage otherMsg) {
+            return (int) (globalLogPointer - otherMsg.globalLogPointer);
+        }
+    }
+
+    /**
+     * A priority queue that buffers the outgoing messages
+     * It is thread-safe
+     */
+    PriorityBlockingQueue<ToBeLoggedMessage> outMsgs = new PriorityBlockingQueue();
+
+    /**
+     * after persisting some part of the log, check to see if we can let some
+     * queued messages be sent out
+     */
+    void letPersistedMessagesGo() {
+        long persistedIndex = logPersister.getGlobalPointer();
+        while (true) {
+            ToBeLoggedMessage firstMsg = outMsgs.poll();
+            if (firstMsg != null && firstMsg.globalLogPointer >= persistedIndex)
+                firstMsg.send();
+            else
+                break;
+        }
+    }
 
     private ScheduledExecutorService executor;
     /**
@@ -233,6 +287,7 @@ public class TSOState {
                                         //update the pointer of the last persisted data
                                         LogPersister.ToBePersistedData toBePersistedData = (LogPersister.ToBePersistedData) ctx;
                                         toBePersistedData.persisted();
+                                        letPersistedMessagesGo();
                                     }
                                 }
                             }, toBePersistedData);

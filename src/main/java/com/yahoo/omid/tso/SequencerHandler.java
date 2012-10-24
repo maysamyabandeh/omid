@@ -49,7 +49,6 @@ import org.jboss.netty.channel.SimpleChannelHandler;
 import org.jboss.netty.channel.group.ChannelGroup;
 import org.jboss.netty.channel.group.DefaultChannelGroup;
 
-import com.yahoo.omid.tso.TSOSharedMessageBuffer.ReadingBuffer;
 import com.yahoo.omid.tso.messages.PeerIdAnnoncement;
 import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
 import com.yahoo.omid.tso.messages.EndOfBroadcast;
@@ -228,7 +227,7 @@ public class SequencerHandler extends SimpleChannelHandler {
                 Thread.sleep(5);//allow the writes to accumulate
                 //TODO: replace the voodo number 5
                 //inject random errors: used for testing
-                if (error()) return;
+                //if (error()) return;
                 ChannelBuffer tail = logReader.tail();
                 if (tail == null)
                     return;

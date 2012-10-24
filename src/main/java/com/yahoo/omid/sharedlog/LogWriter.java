@@ -99,5 +99,11 @@ public class LogWriter implements FollowedPointer {
         boolean isLagged = log.isXLaggedBehindY(globalX, nextGlobalPointer);
         return !isLagged;
     }
+
+    @Override
+    public final long getGlobalPointer() {
+        return atomicGlobalPointer.get();
+    }
+
 }
 

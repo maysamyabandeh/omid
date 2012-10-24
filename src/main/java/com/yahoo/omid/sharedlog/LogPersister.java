@@ -58,6 +58,7 @@ public class LogPersister implements FollowedPointer {
         atomicPersistingGlobalPointer = new AtomicLong(0);
     }
 
+    @Override
     public final long getGlobalPointer() {
         return atomicPersistedGlobalPointer.get();
     }
