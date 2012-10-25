@@ -41,20 +41,18 @@ public class Elders {
         failedElders = new TreeSet<Elder>();
     }
 
-    public Elder getEldest() {
+    synchronized public Elder getEldest() {
         return eldest;
     }
 
-    public boolean isEldestChangedSinceLastProbe() {
+    synchronized public boolean isEldestChangedSinceLastProbe() {
         boolean res;
-        synchronized (this) {
-            res = eldestChangedSinceLastProbe;
-            eldestChangedSinceLastProbe = false;
-        }
+        res = eldestChangedSinceLastProbe;
+        eldestChangedSinceLastProbe = false;
         return res;
     }
 
-    public Iterator<Elder> failedEldersIterator() {
+    synchronized public Iterator<Elder> failedEldersIterator() {
         return failedElders.iterator();
     }
 
@@ -88,44 +86,37 @@ public class Elders {
             eldestChangedSinceLastProbe = true;
     }
 
-    public void addElder(long ts, long tc, ArrayList<RowKey> rowsWithWriteWriteConflict) {
-        synchronized (this) {
-            Elder e = new Elder(ts, tc);
-            //TODO: store the rest as well
-            heapOfElders.offer(e);
-            setOfElders.add(e);
-            updateEldest(e);
-            //System.out.println("WWWWWW " + ts);
-        }
+    synchronized public void addElder(long ts, long tc, ArrayList<RowKey> rowsWithWriteWriteConflict) {
+        Elder e = new Elder(ts, tc);
+        //TODO: store the rest as well
+        heapOfElders.offer(e);
+        setOfElders.add(e);
+        updateEldest(e);
     }
 
-    public boolean reincarnateElder(long id) {
+    synchronized public boolean reincarnateElder(long id) {
         boolean itWasFailed;
-        synchronized (this) {
-            assert(eldest == null || eldest.getId() <= id);
-            Elder e = new Elder(id);
-            boolean isStillElder = setOfElders.remove(e);
-            itWasFailed = false;
-            if (!isStillElder)//then it is a failed elder
-                itWasFailed = failedElders.remove(e);
-            //do not do anything on heap
-            if (eldest != null && eldest.getId() == id)
-                setEldest();
-        }
+        assert(eldest == null || eldest.getId() <= id);
+        Elder e = new Elder(id);
+        boolean isStillElder = setOfElders.remove(e);
+        itWasFailed = false;
+        if (!isStillElder)//then it is a failed elder
+            itWasFailed = failedElders.remove(e);
+        //do not do anything on heap
+        if (eldest != null && eldest.getId() == id)
+            setEldest();
         return itWasFailed;
     }
 
-    public Set<Elder> raiseLargestDeletedTransaction(long id) {
+    synchronized public Set<Elder> raiseLargestDeletedTransaction(long id) {
         Set<Elder> failed = null;
-        synchronized (this) {
-            while (heapOfElders.size() > 0 && heapOfElders.peek().getId() < id) {
-                Elder e = heapOfElders.poll();
-                boolean isStillElder = setOfElders.remove(e);
-                if (isStillElder) {
-                    if (failed == null)
-                        failed = new TreeSet<Elder>();
-                    failed.add(e);
-                }
+        while (heapOfElders.size() > 0 && heapOfElders.peek().getId() < id) {
+            Elder e = heapOfElders.poll();
+            boolean isStillElder = setOfElders.remove(e);
+            if (isStillElder) {
+                if (failed == null)
+                    failed = new TreeSet<Elder>();
+                failed.add(e);
             }
         }
         return failed;

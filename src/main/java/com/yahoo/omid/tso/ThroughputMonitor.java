@@ -61,11 +61,9 @@ public class ThroughputMonitor extends Thread {
          long oldtotalget = CommitHashMap.gettotalget(); 
          long oldtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
          long oldtotalwalkforput = CommitHashMap.gettotalwalkforput(); 
-         long oldfull = TSOMessageBuffer.itWasFull;
          long oldflushes = TSOSharedMessageBuffer._flushes;
          long oldforcedflushes = TSOSharedMessageBuffer._forcedflushes;
          long oldflusheSize = TSOSharedMessageBuffer._flSize;
-         long oldwaited = TSOMessageBuffer.waited;
          long old1B = TSOSharedMessageBuffer._1B;
          long old2B = TSOSharedMessageBuffer._2B;
          long oldAB = TSOSharedMessageBuffer._AB;
@@ -101,11 +99,9 @@ public class ThroughputMonitor extends Thread {
             long newtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
             long newtotalwalkforput = CommitHashMap.gettotalwalkforput();
 
-            long newfull = TSOMessageBuffer.itWasFull;
             long newflushes = TSOSharedMessageBuffer._flushes;
             long newforcedflushes = TSOSharedMessageBuffer._forcedflushes;
             long newflusheSize = TSOSharedMessageBuffer._flSize;
-            long newwaited = TSOMessageBuffer.waited;
             
             long new1B = TSOSharedMessageBuffer._1B;
             long new2B = TSOSharedMessageBuffer._2B;
@@ -147,7 +143,7 @@ public class ThroughputMonitor extends Thread {
                     (newflushes - oldflushes),
                     newEmptyFlushes - oldEmptyFlushes,
                     newQueries - oldQueries,
-                    TSOBuffer.nBuffers,
+                    0,
                     newExtraGetsPerformed - oldExtraGetsPerformed,
                     newAskedTSO - oldAskedTSO,
                     (newforcedflushes - oldforcedflushes),
@@ -176,11 +172,9 @@ public class ThroughputMonitor extends Thread {
             oldtotalput = newtotalput;
             oldtotalwalkforget = newtotalwalkforget;
             oldtotalwalkforput = newtotalwalkforput;
-            oldfull = newfull;
             oldflushes = newflushes;
             oldforcedflushes = newforcedflushes;
             oldflusheSize = newflusheSize;
-            oldwaited = newwaited;
             oldOverflow = newOverflow;
             
 

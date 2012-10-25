@@ -190,11 +190,9 @@ public class TSOHandler extends SimpleChannelHandler {
         //synchronized (sharedState) {
             //sharedState.uncommited.finished(msg.startTimestamp);
         //}
-        synchronized (sharedState) {
-            abortCount++;
-            sharedState.processAbort(msg.startTimestamp);
-            queueHalfAbort(msg.startTimestamp);
-        }
+        abortCount++;
+        sharedState.processAbort(msg.startTimestamp);
+        queueHalfAbort(msg.startTimestamp);
     }
 
     /**
@@ -227,61 +225,69 @@ public class TSOHandler extends SimpleChannelHandler {
      * Handle the TimestampRequest message
      */
     public void handle(TimestampRequest msg, Channel channel) {
+        //Prepare a response message
         TimestampResponse response = null;
-        synchronized (sharedState) {
-            try {
-                long timestamp;
+        try {
+            long timestamp;
+            synchronized (sharedState) {
                 timestamp = timestampOracle.next(null);
-                //if we do not want to keep track of the commit, simply set it finished
-                if (!msg.trackProgress) {
-                    sharedState.uncommited.finished(timestamp);
-                    //consider the transaction as committed
-                    if (msg.globalTxn)
-                        globaltxnCnt++;
-                    else
-                        txnCnt++;
-                }
-                if (msg.isSequenced())
-                    response = new TimestampResponse(timestamp, msg.getSequence());
-                else
-                    response = new TimestampResponse(timestamp);
-            } catch (IOException e) {
-                e.printStackTrace();
-                return;
             }
+            //if we do not want to keep track of the commit, simply set it finished
+            if (!msg.trackProgress) {
+                sharedState.uncommited.finished(timestamp);
+                //consider the transaction as committed
+                if (msg.globalTxn)
+                    globaltxnCnt++;
+                else
+                    txnCnt++;
+            }
+            if (msg.isSequenced())
+                response = new TimestampResponse(timestamp, msg.getSequence());
+            else
+                response = new TimestampResponse(timestamp);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return;
         }
 
         LogReader logReader;
-        synchronized (sharedState.channelToReaderMap) {
-            logReader = sharedState.channelToReaderMap.get(channel);
-            if (logReader == null) {
-
-                synchronized (sharedState) {
-                    //send initializing messages to the client
-                    channel.write(new CommittedTransactionReport(sharedState.latestStartTimestamp, sharedState.latestCommitTimestamp));
-                    synchronized (sharedState.hashmap) {
-                        for (Long halfAborted : sharedState.hashmap.halfAborted) {
-                            channel.write(new AbortedTransactionReport(halfAborted));
-                        }
-                        for (Iterator<Elder> failedElders = sharedState.elders.failedEldersIterator(); failedElders.hasNext(); ) {
-                            Elder fe = failedElders.next();
-                            channel.write(new FailedElderReport(fe.getId(), fe.getCommitTimestamp()));
-                        }
-                    }
-                    channel.write(new AbortedTransactionReport(sharedState.latestHalfAbortTimestamp));
-                    channel.write(new FullAbortReport(sharedState.latestFullAbortTimestamp));
-                    channel.write(new LargestDeletedTimestampReport(sharedState.largestDeletedTimestamp));
-
-                    logReader = new LogReader(sharedState.sharedLog, sharedState.logPersister, sharedState.logPersister.getGlobalPointer());
-                    sharedState.channelToReaderMap.put(channel, logReader);
-                    LOG.warn("init reader for: " + channel);
-
-                    channelGroup.add(channel);
-                    clientChannels.add(channel);
-                    LOG.warn("Channel connected: " + sharedState.channelToReaderMap.size());
+        logReader = sharedState.channelToReaderMap.get(channel);
+        if (logReader == null) {
+            //1. first send the initial messages to init the client replica of metadata
+            synchronized (sharedState) {
+                //send initializing messages to the client
+                channel.write(new CommittedTransactionReport(sharedState.latestStartTimestamp, sharedState.latestCommitTimestamp));
+                channel.write(new AbortedTransactionReport(sharedState.latestHalfAbortTimestamp));
+                channel.write(new FullAbortReport(sharedState.latestFullAbortTimestamp));
+                channel.write(new LargestDeletedTimestampReport(sharedState.largestDeletedTimestamp));
+            }
+            synchronized (sharedState.hashmap.halfAborted) {
+                for (Long halfAborted : sharedState.hashmap.halfAborted) {
+                    channel.write(new AbortedTransactionReport(halfAborted));
                 }
             }
+            synchronized (sharedState.elders) {
+                for (Iterator<Elder> failedElders = 
+                        sharedState.elders.failedEldersIterator(); 
+                        failedElders.hasNext(); ) {
+                    Elder fe = failedElders.next();
+                    channel.write(new FailedElderReport(fe.getId(), 
+                                fe.getCommitTimestamp()));
+                        }
+            }
+
+            //2. create a new logreader for this channel
+            //TODO: what is the right log index to read from
+            logReader = new LogReader(sharedState.sharedLog, sharedState.logPersister, sharedState.logPersister.getGlobalPointer());
+            LogReader prevValue = sharedState.channelToReaderMap.put(channel, logReader);
+            assert(prevValue == null);
+            LOG.warn("init reader for: " + channel);
+            channelGroup.add(channel);
+            clientChannels.add(channel);
+            LOG.warn("Channel connected: " + sharedState.channelToReaderMap.size());
         }
+
+        //Piggyback the previous commit metadata
         try {
             ChannelBuffer tail = logReader.tail();
             if (tail != null)
@@ -289,21 +295,15 @@ public class TSOHandler extends SimpleChannelHandler {
         } catch (SharedLogLateFollowerException lateE) {
             //reset connection to the client
             channel.close();
-            synchronized (sharedState.channelToReaderMap) {
-                sharedState.channelToReaderMap.remove(channel);
-            }
+            sharedState.channelToReaderMap.remove(channel);
         } catch (SharedLogException sharedE) {
             //reset connection to the client
             channel.close();
-            synchronized (sharedState.channelToReaderMap) {
-                sharedState.channelToReaderMap.remove(channel);
-            }
+            sharedState.channelToReaderMap.remove(channel);
         }
 
         channel.write(response);
     }
-
-    private boolean finish;
 
     /**
      * Handle the PrepareCommit message
@@ -490,10 +490,8 @@ public class TSOHandler extends SimpleChannelHandler {
         }
         //TODO: should we be able to recover the writeset of failed elders?
         if (newmax > oldmax) {//I caused a raise in Tmax
-            synchronized (sharedState.hashmap) {
-                for (Long id : toAbort)
-                    sharedState.hashmap.setHalfAborted(id);
-            }
+            for (Long id : toAbort)
+                sharedState.hashmap.setHalfAborted(id);
             if (!IsolationLevel.checkForWriteWriteConflicts) {
                 Set<Elder> eldersToBeFailed = sharedState.elders.raiseLargestDeletedTransaction(newmax);
                 if (eldersToBeFailed != null && !eldersToBeFailed.isEmpty()) {
@@ -511,9 +509,7 @@ public class TSOHandler extends SimpleChannelHandler {
 
     private void doAbort(CommitRequest msg, CommitResponse reply)
         throws IOException {
-        synchronized (sharedState.hashmap) {
-            sharedState.processAbort(msg.getStartTimestamp());
-        }
+        sharedState.processAbort(msg.getStartTimestamp());
         queueHalfAbort(msg.getStartTimestamp());
     }
 
@@ -657,54 +653,29 @@ public class TSOHandler extends SimpleChannelHandler {
     public void handle(CommitQueryRequest msg, Channel channel) {
         CommitQueryResponse reply = new CommitQueryResponse(msg.startTimestamp);
         reply.queryTimestamp = msg.queryTimestamp;
+        long value, tmax;
         synchronized (sharedState) {
-            queries++;
-            long value;
             value = sharedState.hashmap.getCommittedTimestamp(msg.queryTimestamp);
-            if (value != 0) { //it exists
-                reply.commitTimestamp = value;
-                reply.committed = value < msg.startTimestamp;//set as abort
-            }
-            else if (sharedState.largestDeletedTimestamp < msg.queryTimestamp) 
-                reply.committed = false;
-            else if (sharedState.hashmap.isHalfAborted(msg.queryTimestamp))
-                reply.committed = false;
-            else 
-                reply.retry = true;
-            //retry is show that we cannot distinguish two cases
-            //1. Tc < Tmax
-            //2. Ts < Tmax && aborted && Cleanedup is sent after we read the value but is received before this query is processed.
-
-            channel.write(reply);
-            // We send the message directly. If after a failure the state is inconsistent we'll detect it
+            tmax = sharedState.largestDeletedTimestamp;
         }
+        queries++;
+        if (value != 0) { //it exists
+            reply.commitTimestamp = value;
+            reply.committed = value < msg.startTimestamp;//set as abort
+        }
+        else if (tmax < msg.queryTimestamp) 
+            reply.committed = false;
+        else if (sharedState.hashmap.isHalfAborted(msg.queryTimestamp))
+            reply.committed = false;
+        else 
+            reply.retry = true;
+        //retry is show that we cannot distinguish two cases
+        //1. Tc < Tmax
+        //2. Ts < Tmax && aborted && Cleanedup is sent after we read the value but is received before this query is processed.
+
+        channel.write(reply);
+        // We send the message directly. If after a failure the state is inconsistent we'll detect it
     }
-
-  //private void flushTheBatch() {
-  //    for (ChannelandMessage cam : theBatch) {
-  //        cam.channel.write(cam.msg);
-  //    }
-  //}
-
-  //private class FlushThread implements Runnable {
-  //    @Override
-  //    public void run() {
-  //        if (finish) {
-  //            return;
-  //        }
-  //        if (sharedState.nextBatch.size() > 0) {
-  //            synchronized (sharedState) {
-  //                if (sharedState.nextBatch.size() > 0) {
-  //                    if(LOG.isDebugEnabled()){
-  //                        LOG.debug("Flushing log batch.");
-  //                    }
-  //                    flushTheBatch();
-  //                }
-  //            }
-  //        }
-  //        flushFuture = executor.schedule(flushThread, TSOState.FLUSH_TIMEOUT, TimeUnit.MILLISECONDS);
-  //    }
-  //}
 
     /**
      * Used to check if anything is logged during the process of this message
@@ -720,7 +691,7 @@ public class TSOHandler extends SimpleChannelHandler {
     private void logIt(ChannelBuffer buf) {
         somethingIsLogged = true;
         try {
-            //System.out.println("logIt");
+            //append is synchronized
             sharedState.logWriter.append(buf);
         } catch (SharedLogException e) {
             e.printStackTrace();
@@ -731,14 +702,12 @@ public class TSOHandler extends SimpleChannelHandler {
     private void queueCommit(long startTimestamp, long commitTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeCommit(tempLogBuffer, startTimestamp, commitTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
     private void queueHalfAbort(long startTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeHalfAbort(tempLogBuffer, startTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
@@ -746,35 +715,30 @@ public class TSOHandler extends SimpleChannelHandler {
         tempLogBuffer.clear();
         long startTimestamp = eldest == null ? -1 : eldest.getId();
         sharedState.sharedMessageBuffer.writeEldest(tempLogBuffer, startTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
     private void queueReincarnatdElder(long startTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeReincarnatedElder(tempLogBuffer, startTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
     private void queueFailedElder(long startTimestamp, long commitTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeFailedElder(tempLogBuffer, startTimestamp, commitTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
     private void queueFullAbort(long startTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeFullAbort(tempLogBuffer, startTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
     private void queueLargestIncrease(long largestTimestamp) {
         tempLogBuffer.clear();
         sharedState.sharedMessageBuffer.writeLargestIncrease(tempLogBuffer, largestTimestamp);
-        //append is synchronized
         logIt(tempLogBuffer);
     }
 
@@ -782,30 +746,26 @@ public class TSOHandler extends SimpleChannelHandler {
      * Handle the ReincarnationReport message
      */
     public void handle(ReincarnationReport msg, Channel channel) {
-        synchronized (sharedState) {
-            LOG.warn("reincarnated: " + msg.startTimestamp);
-            boolean itWasFailed = sharedState.elders.reincarnateElder(msg.startTimestamp);
-            if (itWasFailed) {
-                LOG.warn("a failed elder is reincarnated: " + msg.startTimestamp);
-                //tell the clients that the failed elder is reincarnated
-                queueReincarnatdElder(msg.startTimestamp);
-            }
-            if (sharedState.elders.isEldestChangedSinceLastProbe()) {
-                LOG.warn("eldest is changed: " + msg.startTimestamp);
-                queueEldestUpdate(sharedState.elders.getEldest());
-            }
-            else
-                LOG.warn("eldest " + sharedState.elders.getEldest() + " isnt changed by reincarnated " + msg.startTimestamp );
+        LOG.warn("reincarnated: " + msg.startTimestamp);
+        boolean itWasFailed = sharedState.elders.reincarnateElder(msg.startTimestamp);
+        if (itWasFailed) {
+            LOG.warn("a failed elder is reincarnated: " + msg.startTimestamp);
+            //tell the clients that the failed elder is reincarnated
+            queueReincarnatdElder(msg.startTimestamp);
         }
+        if (sharedState.elders.isEldestChangedSinceLastProbe()) {
+            LOG.warn("eldest is changed: " + msg.startTimestamp);
+            queueEldestUpdate(sharedState.elders.getEldest());
+        }
+        else
+            LOG.warn("eldest " + sharedState.elders.getEldest() + " isnt changed by reincarnated " + msg.startTimestamp );
     }
 
     /**
      * Handle the FullAbortReport message
      */
     public void handle(FullAbortReport msg, Channel chennel) {
-        synchronized (sharedState) {
-            sharedState.processFullAbort(msg.startTimestamp);
-        }
+        sharedState.processFullAbort(msg.startTimestamp);
         queueFullAbort(msg.startTimestamp);
     }
 
@@ -828,6 +788,7 @@ public class TSOHandler extends SimpleChannelHandler {
         Channels.close(e.getChannel());
     }
 
+    private boolean finish;
     public void stop() {
         finish = true;
     }

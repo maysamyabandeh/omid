@@ -16,6 +16,8 @@
 
 package com.yahoo.omid.tso;
 
+import java.util.Collections;
+
 /**
  * A hash map that uses byte[] for the key rather than longs.
  * 
@@ -146,7 +148,7 @@ class CommitHashMap {
 
     // set of half aborted transactions
     // TODO: set the initial capacity in a smarter way
-    java.util.HashSet<Long> halfAborted = new java.util.HashSet<Long>(10000);
+    java.util.Set<Long> halfAborted = Collections.synchronizedSet(new java.util.HashSet<Long>(10000));
 
     // add a new half aborted transaction
     void setHalfAborted(long startTimestamp) {

@@ -57,6 +57,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.PriorityBlockingQueue;
 import com.yahoo.omid.tso.persistence.LoggerConstants;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The wrapper for different states of TSO
@@ -189,7 +190,7 @@ public class TSOState {
     /**
      * We keep a mapping between channels and logreaders.
      */
-    Map<Channel, LogReader> channelToReaderMap = new HashMap<Channel, LogReader>();
+    Map<Channel, LogReader> channelToReaderMap = new ConcurrentHashMap<Channel, LogReader>();
 
     /**
      * This class associates a message to an index in the log
@@ -349,7 +350,7 @@ public class TSOState {
 
    public Uncommited uncommited;
 
-   // The list of the elders: the committed transactions with write write conflicts
+   //The list of the elders: the committed transactions with write write conflicts
    public Elders elders;
 
    public Set<Long> failedPrepared = Collections.synchronizedSet(new HashSet<Long>(100));
