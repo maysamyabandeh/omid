@@ -67,6 +67,7 @@ import com.yahoo.omid.tso.serialization.TSODecoder;
 import com.yahoo.omid.tso.serialization.TSOEncoder;
 import com.yahoo.omid.tso.Zipper;
 import java.io.OutputStream;
+import com.yahoo.omid.tso.messages.TimestampSnapshot;
 
 /**
  * Builds the TSO state from a file if there has been a previous 
@@ -249,6 +250,9 @@ public class SyncFileStateBuilder extends StateBuilder {
         } else if (msg instanceof CommittedTransactionReport) {
             CommittedTransactionReport ctr = (CommittedTransactionReport) msg;
             tsoState.processCommit(ctr.startTimestamp, ctr.commitTimestamp);
+        } else if (msg instanceof TimestampSnapshot) {
+            TimestampSnapshot tss = (TimestampSnapshot) msg;
+            tsoState.getSO().initialize(tss.maxTimestamp);
         } else {
             LOG.error("Unkown message in the log: " + msg);
             System.exit(1);

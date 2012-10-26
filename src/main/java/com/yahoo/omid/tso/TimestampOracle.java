@@ -24,9 +24,15 @@ import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import com.yahoo.omid.tso.messages.TimestampSnapshot;
+import com.yahoo.omid.tso.messages.AbortedTransactionReport;
+import com.yahoo.omid.sharedlog.LogWriter;
+import com.yahoo.omid.sharedlog.SharedLogException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.jboss.netty.buffer.ChannelBuffer;
+import org.jboss.netty.buffer.ChannelBuffers;
 
 /**
  * The Timestamp Oracle that gives monotonically increasing timestamps
@@ -51,23 +57,31 @@ public class TimestampOracle {
 
     private boolean enabled;
 
+    ChannelBuffer tmpTsSnapshotBuffer = ChannelBuffers.buffer(50);
+
     /**
      * Must be called holding an exclusive lock
-     * 
-     * return the next timestamp
+     * @return the next timestamp
      */
-    public long next(DataOutputStream toWal) throws IOException {
+    public long next(LogWriter logWriter) throws IOException {
         last++;
         if (last >= maxTimestamp) {
-            //TODO: the last timestamp could be recovered from the commit entries
-            //toWal.writeByte(LoggerProtocol.TIMESTAMPORACLE);
-            //toWal.writeLong(last);
             maxTimestamp += TIMESTAMP_BATCH;
+            TimestampSnapshot tsnap = new TimestampSnapshot(maxTimestamp);
+            //AbortedTransactionReport tsnap = new AbortedTransactionReport(maxTimestamp);
+            tmpTsSnapshotBuffer.clear();
+            tmpTsSnapshotBuffer.writeByte(TSOMessage.TimestampSnapshot);
+            tsnap.writeObject(tmpTsSnapshotBuffer);
+            try {
+                logWriter.append(tmpTsSnapshotBuffer);
+            } catch (SharedLogException e) {
+                e.printStackTrace();
+                System.exit(1);
+            }
         }
         if(LOG.isTraceEnabled()){
             LOG.trace("Next timestamp: " + last);
         }
-        
         return last;
     }
 
@@ -82,7 +96,6 @@ public class TimestampOracle {
     private static final String BACKUP = "/tmp/tso-persist.backup";
     private static final String PERSIST = "/tmp/tso-persist.txt";
 
-    
     /**
      * Constructor
      */
@@ -92,26 +105,24 @@ public class TimestampOracle {
         this.last = 0;
         initialize();
     }
-    
+
     /**
      * Starts from scratch.
      */
-    public void initialize(){
+    private void initialize(){
        this.enabled = true;
        //enable the old scheme of reading the last timestmap from a file
-       initFromFile();
+       //initFromFile();
     }
 
     /**
      * Starts with a given timestamp.
-     * 
-     * @param timestamp
+     * @param timestamp upperbound of previously used timestamps
      */
     public void initialize(long timestamp){
-        //TODO: it seems that it ignore the input param
         LOG.info("Initializing timestamp oracle");
-        this.last = this.first = Math.max(this.last, TIMESTAMP_BATCH);
-        maxTimestamp = this.first;
+        this.last = this.first = timestamp;
+        this.maxTimestamp = this.last + TIMESTAMP_BATCH;
         LOG.info("First: " + this.first + ", Last: " + this.last);
         this.enabled = true;
     }

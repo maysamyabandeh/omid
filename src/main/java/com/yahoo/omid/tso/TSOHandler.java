@@ -229,7 +229,7 @@ public class TSOHandler extends SimpleChannelHandler {
         try {
             long timestamp;
             synchronized (sharedState) {
-                timestamp = timestampOracle.next(null);
+                timestamp = timestampOracle.next(sharedState.logWriter);
             }
             //if we do not want to keep track of the commit, simply set it finished
             if (!msg.trackProgress) {
@@ -458,7 +458,7 @@ public class TSOHandler extends SimpleChannelHandler {
         synchronized (sharedState) {
             newmax = oldmax = sharedState.largestDeletedTimestamp;
             //a) obtaining a commit timestamp
-            reply.commitTimestamp = timestampOracle.next(null);
+            reply.commitTimestamp = timestampOracle.next(sharedState.logWriter);
             //b) for the sake of efficiency do this, otherwise raise in Tmax causes perofrmance problems
             sharedState.uncommited.finished(reply.commitTimestamp);
             //c) commit the transaction
@@ -686,7 +686,7 @@ public class TSOHandler extends SimpleChannelHandler {
      * This is a temp buffer used pass the encoded message to the log
      */
     ChannelBuffer tempLogBuffer = ChannelBuffers.buffer(50);
-    //30 is overestimation of tr size
+    //50 is overestimation of tr size
     private void logIt(ChannelBuffer buf) {
         somethingIsLogged = true;
         try {

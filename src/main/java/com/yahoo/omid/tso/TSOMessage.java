@@ -62,6 +62,7 @@ public interface TSOMessage {
    final public byte MultiCommitRequest =(byte) 0xd2;
    final public byte BroadcastJoinRequest =(byte) 0xd3;
    final public byte EndOfBroadcast =(byte) 0xd4;
+   final public byte TimestampSnapshot =(byte) 0xd5;
 
    /*
     * Deserialize function

@@ -72,6 +72,7 @@ import com.yahoo.omid.tso.messages.ReincarnationReport;
 import com.yahoo.omid.tso.messages.EldestUpdate;
 import com.yahoo.omid.tso.messages.FailedElderReport;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
+import com.yahoo.omid.tso.messages.TimestampSnapshot;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.serialization.TSODecoder;
@@ -455,6 +456,8 @@ public class TSOClient extends BasicClient {
             LargestDeletedTimestampReport r = (LargestDeletedTimestampReport) msg;
             largestDeletedTimestamp = r.largestDeletedTimestamp;
             committed.raiseLargestDeletedTransaction(r.largestDeletedTimestamp);
+        } else if (msg instanceof TimestampSnapshot) {
+            //ignore, it is for the log
         } else {
             LOG.error("Unknown message received " +  msg);
         }

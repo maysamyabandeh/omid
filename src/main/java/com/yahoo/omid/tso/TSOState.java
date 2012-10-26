@@ -311,7 +311,7 @@ public class TSOState {
     */
    private TimestampOracle timestampOracle;
    
-   protected TimestampOracle getSO(){
+   public TimestampOracle getSO(){
        return timestampOracle;
    }
    

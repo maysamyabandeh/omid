@@ -44,6 +44,7 @@ import com.yahoo.omid.tso.messages.EldestUpdate;
 import com.yahoo.omid.tso.messages.ReincarnationReport;
 import com.yahoo.omid.tso.messages.MultiCommitRequest;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
+import com.yahoo.omid.tso.messages.TimestampSnapshot;
 import com.yahoo.omid.tso.messages.TimestampRequest;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 
@@ -59,6 +60,8 @@ public class TSOEncoder extends OneToOneEncoder{
 
         if (msg instanceof ChannelBuffer) {
             return msg;
+        } else if (msg instanceof TimestampSnapshot) {
+            objWrapper.writeByte(TSOMessage.TimestampSnapshot);
         } else if (msg instanceof TimestampRequest) {
             objWrapper.writeByte(TSOMessage.TimestampRequest);
         } else if (msg instanceof TimestampResponse) {

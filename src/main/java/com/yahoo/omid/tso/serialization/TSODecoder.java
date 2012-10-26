@@ -47,6 +47,7 @@ import com.yahoo.omid.tso.messages.BroadcastJoinRequest;
 import com.yahoo.omid.tso.messages.EndOfBroadcast;
 import com.yahoo.omid.tso.messages.LargestDeletedTimestampReport;
 import com.yahoo.omid.tso.messages.TimestampRequest;
+import com.yahoo.omid.tso.messages.TimestampSnapshot;
 import com.yahoo.omid.tso.messages.TimestampResponse;
 import com.yahoo.omid.tso.messages.MultiCommitRequest;
 
@@ -81,6 +82,9 @@ public class TSODecoder extends FrameDecoder {
                 LOG.trace("Decoding message : " + type);
             }
             switch (type) {
+                case TSOMessage.TimestampSnapshot:
+                    msg = new TimestampSnapshot();
+                    break;
                 case TSOMessage.TimestampRequest:
                     msg = new TimestampRequest();
                     break;
