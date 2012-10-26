@@ -61,27 +61,12 @@ public class ThroughputMonitor extends Thread {
          long oldtotalget = CommitHashMap.gettotalget(); 
          long oldtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
          long oldtotalwalkforput = CommitHashMap.gettotalwalkforput(); 
-         long oldflushes = TSOSharedMessageBuffer._flushes;
-         long oldforcedflushes = TSOSharedMessageBuffer._forcedflushes;
-         long oldflusheSize = TSOSharedMessageBuffer._flSize;
-         long old1B = TSOSharedMessageBuffer._1B;
-         long old2B = TSOSharedMessageBuffer._2B;
-         long oldAB = TSOSharedMessageBuffer._AB;
-         long oldAS = TSOSharedMessageBuffer._AS;
-         long oldLL = TSOSharedMessageBuffer._LL;
-         long oldComs = TSOSharedMessageBuffer._Coms;
-         long oldHa = TSOSharedMessageBuffer._ha;
-         long oldFa = TSOSharedMessageBuffer._fa;
-         long oldLi = TSOSharedMessageBuffer._li;
-         long oldWrites = TSOSharedMessageBuffer._Writes;
-         long oldEmptyFlushes = TSOSharedMessageBuffer._emptyFlushes;
          
          long oldAskedTSO = TSOClient.askedTSO;
          long oldQueries = TSOHandler.queries;
          long oldElementsRead = TransactionalTable.elementsRead;
          long oldExtraGetsPerformed = TransactionalTable.extraGetsPerformed;
          
-         long oldOverflow = TSOSharedMessageBuffer._overflows;
          for (;;) {
             Thread.sleep(3000);
             
@@ -99,27 +84,6 @@ public class ThroughputMonitor extends Thread {
             long newtotalwalkforget = CommitHashMap.gettotalwalkforget(); 
             long newtotalwalkforput = CommitHashMap.gettotalwalkforput();
 
-            long newflushes = TSOSharedMessageBuffer._flushes;
-            long newforcedflushes = TSOSharedMessageBuffer._forcedflushes;
-            long newflusheSize = TSOSharedMessageBuffer._flSize;
-            
-            long new1B = TSOSharedMessageBuffer._1B;
-            long new2B = TSOSharedMessageBuffer._2B;
-            long newAB = TSOSharedMessageBuffer._AB;
-            long newAS = TSOSharedMessageBuffer._AS;
-            long newLL = TSOSharedMessageBuffer._LL;
-            long newComs = TSOSharedMessageBuffer._Coms;
-            long newHa = TSOSharedMessageBuffer._ha;
-            long newFa = TSOSharedMessageBuffer._fa;
-            long newLi = TSOSharedMessageBuffer._li;
-            long newWrites = TSOSharedMessageBuffer._Writes;
-            double avg = TSOSharedMessageBuffer._Avg;
-            double avg2 = TSOSharedMessageBuffer._Avg2;
-            
-            long newOverflow = TSOSharedMessageBuffer._overflows;
-            long newEmptyFlushes = TSOSharedMessageBuffer._emptyFlushes;
-            
-
             long newQueries = TSOHandler.queries;
             long newElementsRead = TransactionalTable.elementsRead;
             long newExtraGetsPerformed = TransactionalTable.extraGetsPerformed;
@@ -129,28 +93,18 @@ public class ThroughputMonitor extends Thread {
                 TSOPipelineFactory.bwhandler.measure();
             }
             LOG.trace(String.format("SERVER: %4.1f (%4.1f) TPS(G), %4.1f (%4.1f) Abort/s(G), %4.1f rjctd/s "
-                    + "Tot overflows: %d Tot flushes: %d Tot empty flu: %d "
-                    + "Queries: %d CurrentBuffers: %d ExtraGets: %d AskedTSO: %d Tot fflushes: %d"
-                    + "Avg commit: %2.4f Avg flush: %5.2f "
-                    + "Avg write: %5.2f Tot writes: %d Rec Bytes/s: %5.2fMBs Sent Bytes/s: %5.2fMBs %d ",
+                    + "Queries: %d CurrentBuffers: %d ExtraGets: %d AskedTSO: %d "
+                    + "Rec Bytes/s: %5.2fMBs Sent Bytes/s: %5.2fMBs %d ",
                     //+ "Owned %d Disowned %d ",
                     (newCounter - oldCounter) / (float)(endTime - startTime) * 1000,
                     (newGlobalCounter - oldGlobalCounter) / (float)(endTime - startTime) * 1000,
                     (newAbortCount - oldAbortCount) / (float)(endTime - startTime) * 1000,
                     (newGlobalAbortCount - oldGlobalAbortCount) / (float)(endTime - startTime) * 1000,
                     (newOutOfOrderCnt - oldOutOfOrderCnt) / (float)(endTime - startTime) * 1000,
-                    newOverflow - oldOverflow,
-                    (newflushes - oldflushes),
-                    newEmptyFlushes - oldEmptyFlushes,
                     newQueries - oldQueries,
                     0,
                     newExtraGetsPerformed - oldExtraGetsPerformed,
                     newAskedTSO - oldAskedTSO,
-                    (newforcedflushes - oldforcedflushes),
-                    avg,
-                    (newflusheSize - oldflusheSize) / (float)(newflushes - oldflushes),
-                    avg2,
-                    (newWrites - oldWrites),
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesReceivedPerSecond() / (double) (1024 * 1024) : 0,
                     TSOPipelineFactory.bwhandler != null ? TSOPipelineFactory.bwhandler.getBytesSentPerSecond() / (double) (1024 * 1024) : 0,
                     (state == null) ? 0 : state.largestDeletedTimestamp
@@ -172,24 +126,6 @@ public class ThroughputMonitor extends Thread {
             oldtotalput = newtotalput;
             oldtotalwalkforget = newtotalwalkforget;
             oldtotalwalkforput = newtotalwalkforput;
-            oldflushes = newflushes;
-            oldforcedflushes = newforcedflushes;
-            oldflusheSize = newflusheSize;
-            oldOverflow = newOverflow;
-            
-
-            old1B = new1B;
-            old2B = new2B;
-            oldAB = newAB;
-            oldAS = newAS;
-            oldLL = newLL;
-            oldComs = newComs;
-            oldHa = newHa;
-            oldFa = newFa;
-            oldLi = newLi;
-            oldWrites = newWrites;
-            oldEmptyFlushes = newEmptyFlushes;
-            
 
             oldAskedTSO = newAskedTSO;
             oldQueries = newQueries;

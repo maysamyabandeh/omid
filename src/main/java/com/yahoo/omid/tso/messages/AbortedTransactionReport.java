@@ -47,10 +47,8 @@ public class AbortedTransactionReport extends SizedTSOMessage implements TSOMess
     }
 
     @Override
-    public void readObject(ChannelBuffer aInputStream)
-    throws IOException {
-
-    startTimestamp = aInputStream.readLong();
+    public void readObject(ChannelBuffer aInputStream) {
+        startTimestamp = aInputStream.readLong();
     }
 
     @Override

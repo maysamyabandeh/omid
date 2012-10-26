@@ -71,7 +71,6 @@ import com.yahoo.omid.tso.messages.PrepareResponse;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
-import com.yahoo.omid.tso.persistence.LoggerProtocol;
 import com.yahoo.omid.IsolationLevel;
 import com.yahoo.omid.client.TSOClient;
 import java.util.Arrays;
@@ -256,9 +255,9 @@ public class TSOHandler extends SimpleChannelHandler {
             //1. first send the initial messages to init the client replica of metadata
             synchronized (sharedState) {
                 //send initializing messages to the client
-                channel.write(new CommittedTransactionReport(sharedState.latestStartTimestamp, sharedState.latestCommitTimestamp));
-                channel.write(new AbortedTransactionReport(sharedState.latestHalfAbortTimestamp));
-                channel.write(new FullAbortReport(sharedState.latestFullAbortTimestamp));
+                channel.write(new CommittedTransactionReport(sharedState.zipper.lastStartTimestamp, sharedState.zipper.lastCommitTimestamp));
+                channel.write(new AbortedTransactionReport(sharedState.zipper.lastHalfAbortedTimestamp));
+                channel.write(new FullAbortReport(sharedState.zipper.lastFullAbortedTimestamp));
                 channel.write(new LargestDeletedTimestampReport(sharedState.largestDeletedTimestamp));
             }
             synchronized (sharedState.hashmap.halfAborted) {
@@ -701,44 +700,50 @@ public class TSOHandler extends SimpleChannelHandler {
 
     private void queueCommit(long startTimestamp, long commitTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeCommit(tempLogBuffer, startTimestamp, commitTimestamp);
+        sharedState.zipper.encodeCommit(tempLogBuffer, startTimestamp, commitTimestamp);
         logIt(tempLogBuffer);
     }
 
     private void queueHalfAbort(long startTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeHalfAbort(tempLogBuffer, startTimestamp);
+        sharedState.zipper.encodeHalfAbort(tempLogBuffer, startTimestamp);
         logIt(tempLogBuffer);
     }
 
+    EldestUpdate eldestUpdateMsg = new EldestUpdate();
     private void queueEldestUpdate(Elder eldest) {
         tempLogBuffer.clear();
-        long startTimestamp = eldest == null ? -1 : eldest.getId();
-        sharedState.sharedMessageBuffer.writeEldest(tempLogBuffer, startTimestamp);
+        eldestUpdateMsg.startTimestamp = eldest == null ? -1 : eldest.getId();
+        eldestUpdateMsg.writeObject(tempLogBuffer);
         logIt(tempLogBuffer);
     }
 
+    ReincarnationReport reincarnationReport = new ReincarnationReport();
     private void queueReincarnatdElder(long startTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeReincarnatedElder(tempLogBuffer, startTimestamp);
+        reincarnationReport.startTimestamp = startTimestamp;
+        reincarnationReport.writeObject(tempLogBuffer);
         logIt(tempLogBuffer);
     }
 
+    FailedElderReport failedElderReport = new FailedElderReport();
     private void queueFailedElder(long startTimestamp, long commitTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeFailedElder(tempLogBuffer, startTimestamp, commitTimestamp);
+        failedElderReport.startTimestamp = startTimestamp;
+        failedElderReport.commitTimestamp = commitTimestamp;
+        failedElderReport.writeObject(tempLogBuffer);
         logIt(tempLogBuffer);
     }
 
     private void queueFullAbort(long startTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeFullAbort(tempLogBuffer, startTimestamp);
+        sharedState.zipper.encodeFullAbort(tempLogBuffer, startTimestamp);
         logIt(tempLogBuffer);
     }
 
     private void queueLargestIncrease(long largestTimestamp) {
         tempLogBuffer.clear();
-        sharedState.sharedMessageBuffer.writeLargestIncrease(tempLogBuffer, largestTimestamp);
+        sharedState.zipper.encodeLargestIncrease(tempLogBuffer, largestTimestamp);
         logIt(tempLogBuffer);
     }
 

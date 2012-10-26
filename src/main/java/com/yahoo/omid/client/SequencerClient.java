@@ -58,10 +58,7 @@ import org.apache.zookeeper.ZooKeeper;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.conf.ClientConfiguration;
 import com.yahoo.omid.tso.persistence.LoggerConstants;
-
-import java.io.FileInputStream;
-import java.io.File;
-import java.io.FileNotFoundException;
+import com.yahoo.omid.tso.persistence.SyncFileBackendReader;
 
 /**
  * This client connects to the sequencer to register as a receiver of the broadcast stream
@@ -98,70 +95,6 @@ public class SequencerClient extends BasicClient {
      * from the logBackend via this logBackendReader
      */
     LogBackendReader logBackendReader;
-
-    /**
-     * This class provides a backend reader based on files (perhaps over nfs)
-     * TODO: replace it with a more reliable backend
-     */
-    private class SyncFileBackendReader implements LogBackendReader {
-        FileInputStream file;
-        /**
-         * last read index by the cursor
-         */
-        long index = 0;
-
-        public void init(String nfs, String fileName) throws LoggerException {
-            final String path = nfs + "/" + fileName;
-            File fileRef = new File(path);
-            try {
-                file = new FileInputStream(fileRef);
-                LOG.warn("Successfully opened the file " + fileRef + " for reading");
-            } catch (FileNotFoundException e) {
-                LOG.error("File " + fileRef + " not found", e);
-                e.printStackTrace();
-                System.exit(1);
-                //TODO: react better
-            }
-        }
-
-        @Override
-        public void readRange(long fromIndex, long toIndex, ReadRangeCallback cb) {
-            System.out.println("readRange from backend : " + fromIndex + " " + toIndex);
-            //1. seek to fromIndex
-            while (index + 1 < fromIndex) {
-                long seekStep = fromIndex - index - 1;
-                try {
-                    long skipped = file.skip(seekStep);
-                    if (skipped != seekStep)
-                        LOG.error("logBackend data is not ready: skiping " + seekStep + " and it skips only " + skipped);
-                    index += skipped;
-                    System.out.println("Skipping " + seekStep + " index is: " + index);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    System.exit(1);
-                    //TODO: react better
-                }
-            }
-            //2. now read entries up to toIndex
-            while (index < toIndex) {
-                int readStep = (int)Math.min((toIndex - index), 1500);
-                byte[] dst = new byte[readStep];
-                try {
-                    System.out.println("Reading " + readStep + " index is: " + index);
-                    long actualRead = file.read(dst);
-                    if (actualRead != readStep)
-                        LOG.error("logBackend data is not ready: reading " + readStep + " and it reads only " + actualRead);
-                    index += actualRead;
-                    cb.rangePartiallyRead(Code.OK, dst);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    System.exit(1);
-                    //TODO: react better
-                }
-            }
-            cb.rangeReadComplete(Code.OK, index);
-        }
-    }
 
 
     public SequencerClient(Properties conf, TSOState tsoState, ChannelGroup channelGroup) throws IOException {
@@ -233,7 +166,7 @@ public class SequencerClient extends BasicClient {
         loopbackBootstrap.setPipelineFactory(new ChannelPipelineFactory() {
             public ChannelPipeline getPipeline() throws Exception {
                 DefaultChannelPipeline pipeline = new DefaultChannelPipeline();
-                pipeline.addLast("decoder", new TSODecoder());
+                pipeline.addLast("decoder", new TSODecoder(null));
                 pipeline.addLast("encoder", new TSOEncoder());
                 pipeline.addLast("handler", new TSOHandler(channelGroup, tsoState) {
                     @Override

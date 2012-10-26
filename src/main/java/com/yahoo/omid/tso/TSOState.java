@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.Collections;
 
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
-import com.yahoo.omid.tso.persistence.BookKeeperStateBuilder;
 import com.yahoo.omid.tso.persistence.StateLogger;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 
@@ -126,11 +125,9 @@ public class TSOState {
    public long lastServicedSequence = -1;
    
    /**
-    * Object that implements the logic to log records
-    * for recoverability
+    * Implements compression and decompression to and from the sharedLog
     */
-  //depricated 
-   StateLogger logger;
+   Zipper zipper = new Zipper();
 
     /**
      * The sharedLog is a lock-free log that keeps the recent sequenced messages
@@ -309,18 +306,6 @@ public class TSOState {
         }
     }
 
-
-
-    //@depricated
-   public StateLogger getLogger(){
-       return logger;
-   }
-   
-    //@depricated
-   public void setLogger(StateLogger logger){
-       this.logger = logger;
-   }
-   
    /**
     * Only timestamp oracle instance in the system.
     */
@@ -335,13 +320,11 @@ public class TSOState {
     */
    public long largestDeletedTimestamp = 0;
 
-   public long latestCommitTimestamp = 0;
-   public long latestStartTimestamp = 0;
-   public long latestHalfAbortTimestamp = 0;
-   public long latestFullAbortTimestamp = 0;
+   //public long latestCommitTimestamp = 0;
+   //public long latestStartTimestamp = 0;
+   //public long latestHalfAbortTimestamp = 0;
+   //public long latestFullAbortTimestamp = 0;
    
-   public TSOSharedMessageBuffer sharedMessageBuffer = new TSOSharedMessageBuffer(this);
-
    /**
     * The hash map to to keep track of recently committed rows
     * each bucket is about 20 byte, so the initial capacity is 20MB
@@ -368,10 +351,10 @@ public class TSOState {
     * 
     * @param startTimestamp
     */
-   protected long processCommit(long startTimestamp, long commitTimestamp){
+   public long processCommit(long startTimestamp, long commitTimestamp){
       return processCommit(startTimestamp, commitTimestamp, largestDeletedTimestamp);
    }
-   protected long processCommit(long startTimestamp, long commitTimestamp, long newmax){
+   public long processCommit(long startTimestamp, long commitTimestamp, long newmax){
        newmax = hashmap.setCommitted(startTimestamp, commitTimestamp, newmax);
        return newmax;
    }
@@ -381,7 +364,7 @@ public class TSOState {
     * 
     * @param largestDeletedTimestamp
     */
-   protected synchronized void processLargestDeletedTimestamp(long largestDeletedTimestamp){
+   public synchronized void processLargestDeletedTimestamp(long largestDeletedTimestamp){
        this.largestDeletedTimestamp = Math.max(largestDeletedTimestamp, this.largestDeletedTimestamp);
    }
    
@@ -390,7 +373,7 @@ public class TSOState {
     * 
     * @param startTimestamp
     */
-   protected void processAbort(long startTimestamp){
+   public void processAbort(long startTimestamp){
        hashmap.setHalfAborted(startTimestamp);
    }
    
@@ -399,39 +382,15 @@ public class TSOState {
     * 
     * @param startTimestamp
     */
-   protected void processFullAbort(long startTimestamp){
+   public void processFullAbort(long startTimestamp){
        hashmap.setFullAborted(startTimestamp);
    }
 
-   /**
-    * If logger is disabled, then this call is a noop.
-    * 
-    * @param record
-    * @param cb
-    * @param ctx
-    */
-    //@depricated
-   public void addRecord(byte[] record, final AddRecordCallback cb, Object ctx) {
-       if(logger != null){
-           logger.addRecord(record, cb, ctx);
-       } else{
-           cb.addRecordComplete(Code.OK, ctx);
-       }
-   }
    
    /**
     * Closes this state object.
     */
-    //@depricated
    void stop(){
-       if(logger != null){
-           logger.shutdown();
-       }
-   }
-   
-   public TSOState(StateLogger logger, TimestampOracle timestampOracle) {
-       this(timestampOracle);
-       this.logger = logger;
    }
    
    public TSOState(TimestampOracle timestampOracle) {
@@ -439,7 +398,6 @@ public class TSOState {
        this.largestDeletedTimestamp = timestampOracle.get();
        this.uncommited = new Uncommited(largestDeletedTimestamp);
        this.elders = new Elders();
-       this.logger = null;
        startsLockMonitor();
 
        //init the new implementation of the shared message buffer

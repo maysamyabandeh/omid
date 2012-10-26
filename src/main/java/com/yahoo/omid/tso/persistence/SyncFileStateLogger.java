@@ -82,10 +82,7 @@ public class SyncFileStateLogger implements StateLogger {
         final boolean APPEND = true;
         File fileRef = new File(path);
         try {
-            //TODO: append must be true not to delete the WAL
-            //but temporarily I set it to false since currently
-            //the WAL readers do not persistently store the last read cursor
-            file = new FileOutputStream(fileRef, APPEND==false);
+            file = new FileOutputStream(fileRef, APPEND==true);
             LOG.warn("Successfully opened the file " + fileRef);
             cb.loggerInitComplete(Code.OK, this, ctx);
             enabled = true;

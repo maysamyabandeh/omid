@@ -28,8 +28,6 @@ import java.io.IOException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import com.yahoo.omid.tso.persistence.LoggerProtocol;
-
 /**
  * The Timestamp Oracle that gives monotonically increasing timestamps
  * 
@@ -51,7 +49,7 @@ public class TimestampOracle {
     private long last;
     private long first;
 
-    private boolean enabled;    
+    private boolean enabled;
 
     /**
      * Must be called holding an exclusive lock

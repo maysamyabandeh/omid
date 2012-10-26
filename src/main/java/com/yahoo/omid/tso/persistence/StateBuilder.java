@@ -29,12 +29,6 @@ import com.yahoo.omid.tso.TSOState;
 public abstract class StateBuilder {
 
     /**
-     * Logger protocol object. Implements the logic to execute 
-     * state taken out of log records.
-     */
-    LoggerProtocol protocol;
-    
-    /**
      * This call should create a new TSOState object and populate
      * it accordingly. If there was an incarnation of TSO in the past,
      * then this call recovers the state to populate the TSOState

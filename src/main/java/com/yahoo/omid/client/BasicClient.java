@@ -54,6 +54,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.channel.ChannelFuture;
 
 
+import com.yahoo.omid.tso.Zipper;
 import com.yahoo.omid.tso.Committed;
 import com.yahoo.omid.tso.RowKey;
 import com.yahoo.omid.tso.Elder;
@@ -200,7 +201,7 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
         //bootstrap.getPipeline().addLast("executor", new ExecutionHandler(
                     //new OrderedMemoryAwareThreadPoolExecutor(executorThreads, 1024*1024, 4*1024*1024)));
         bootstrap.getPipeline().addLast("handler", handler != null ? handler : this);
-        bootstrap.getPipeline().addFirst("decoder", new TSODecoder());
+        bootstrap.getPipeline().addFirst("decoder", new TSODecoder(new Zipper()));
         bootstrap.getPipeline().addAfter("decoder", "encoder", new TSOEncoder());
         bootstrap.setOption("tcpNoDelay", false);
         bootstrap.setOption("keepAlive", true);
@@ -286,7 +287,7 @@ public class BasicClient extends SimpleChannelHandler implements Comparable<Basi
     @Override
     synchronized
     public void channelOpen(ChannelHandlerContext ctx, ChannelStateEvent e) {
-        //e.getChannel().getPipeline().addFirst("decoder", new TSODecoder());
+        //e.getChannel().getPipeline().addFirst("decoder", new TSODecoder(new Zipper()));
         //e.getChannel().getPipeline().addAfter("decoder", "encoder", new TSOEncoder());
     }
 

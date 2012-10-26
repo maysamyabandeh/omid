@@ -153,7 +153,7 @@ public class SequencerServer  implements Runnable {
            public ChannelPipeline getPipeline() throws Exception {
                System.out.println("creating a new pipeline");
               ChannelPipeline pipeline = Channels.pipeline();
-              pipeline.addLast("decoder", new TSODecoder());
+              pipeline.addLast("decoder", new TSODecoder(null));
               pipeline.addLast("pipelineExecutor", registerExecutionHandler);
               pipeline.addLast("handler", sequencerHandler);
               return pipeline;

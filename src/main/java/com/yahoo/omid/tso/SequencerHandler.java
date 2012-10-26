@@ -55,7 +55,6 @@ import com.yahoo.omid.tso.messages.EndOfBroadcast;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.AddRecordCallback;
 import com.yahoo.omid.tso.persistence.LoggerException;
 import com.yahoo.omid.tso.persistence.LoggerException.Code;
-import com.yahoo.omid.tso.persistence.LoggerProtocol;
 import com.yahoo.omid.tso.persistence.LoggerAsyncCallback.LoggerInitCallback;
 import com.yahoo.omid.IsolationLevel;
 import java.util.Arrays;
@@ -232,9 +231,8 @@ public class SequencerHandler extends SimpleChannelHandler {
                 if (tail == null)
                     return;
                 //used for statistical purposes
-                //TODO: replace them with proper Statistics tool
-                TSOSharedMessageBuffer._flushes++;
-                TSOSharedMessageBuffer._flSize += tail.readableBytes();
+                //flush++;
+                //flushsize += tail.readableBytes();
                 //System.out.println("Braodcasting " + tail.readableBytes() + " from " + logReader);
                 channel.write(tail);
             } catch (SharedLogLateFollowerException lateE) {
@@ -421,9 +419,8 @@ public class SequencerHandler extends SimpleChannelHandler {
         writeCnt ++;
         writeSize += buf.readableBytes();
         //used for statistical purposes
-        //TODO: replace with propoer Statistics methods
-        TSOSharedMessageBuffer._Avg2 = writeSize / (float) writeCnt;
-        TSOSharedMessageBuffer._Writes = writeSize;
+        //_totalWritesInBytes = writeSize;
+        //_averageWriteSize = writeSize / (float) writeCnt;
         try {
             TSOHandler.txnCnt++;
             //append is synchronized to serialize the messages

@@ -45,7 +45,7 @@ import org.jboss.netty.handler.codec.serialization.ObjectDecoder;
 import org.jboss.netty.handler.codec.serialization.ObjectEncoder;
 import org.jboss.netty.handler.execution.OrderedMemoryAwareThreadPoolExecutor;
 
-import com.yahoo.omid.tso.persistence.BookKeeperStateBuilder;
+import com.yahoo.omid.tso.persistence.SyncFileStateBuilder;
 import org.apache.zookeeper.ZooKeeper;
 
 /**
@@ -53,7 +53,7 @@ import org.apache.zookeeper.ZooKeeper;
  */
 public class TSOServer implements Runnable {
     
-    private static final Log LOG = LogFactory.getLog(BookKeeperStateBuilder.class);
+    private static final Log LOG = LogFactory.getLog(TSOServer.class);
 
     private TSOState state;
     private TSOServerConfig config;
@@ -68,11 +68,10 @@ public class TSOServer implements Runnable {
     public TSOServer() {
         super();
         this.config = TSOServerConfig.configFactory();
-        
         this.finish = false;
         this.lock = new Object();
     }
-    
+
     /**
      * The conf for creating an interface to the sequencer
      */
@@ -83,12 +82,12 @@ public class TSOServer implements Runnable {
         this.finish = false;
         this.lock = new Object();
     }
-    
+
     public TSOServer(TSOServerConfig config, Properties sequencerConf) {
         this(config);
         this.sequencerConf = sequencerConf;
     }
-    
+
     public TSOState getState() {
         return state;
     }
@@ -150,7 +149,7 @@ public class TSOServer implements Runnable {
             System.exit(1);
         }
         // The wrapper for the shared state of TSO
-        state = BookKeeperStateBuilder.getState(this.config);
+        state = SyncFileStateBuilder.getState(this.config);
         state.setId(config.getId());
         state.initSequencerClient(sequencerConf);
         //initLogBackend must be called after setId
