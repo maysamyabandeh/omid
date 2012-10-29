@@ -277,7 +277,7 @@ public class TSOHandler extends SimpleChannelHandler {
 
             //2. create a new logreader for this channel
             //TODO: what is the right log index to read from
-            logReader = new LogReader(sharedState.sharedLog, sharedState.logPersister, sharedState.logPersister.getGlobalPointer());
+            logReader = new LogReader(sharedState.sharedLog, sharedState.logWriter, sharedState.logPersister.getGlobalPointer());
             LogReader prevValue = sharedState.channelToReaderMap.put(channel, logReader);
             assert(prevValue == null);
             LOG.warn("init reader for: " + channel);
